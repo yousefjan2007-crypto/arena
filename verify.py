@@ -177,26 +177,40 @@ def test_accounting():
     # around by rounding. Go fully invested at 1.0 on a flat market, then hold it
     # (restating the book's own weights, the way a between-rebalance strategy
     # does). Costs put cash slightly negative, so net sits a hair above 1.0 for
-    # the rest of the run — inside LEV_EPS, so nothing should scale or repair.
-    flat = flat_market()
-    fenv = MarketEnv(flat, CostModel())
-    fobs = fenv.reset()
-    nf = len(flat.symbols)
-    scaled = repairs = 0
-    for k in range(40):
-        px = flat.close[fobs["t"]]
-        w = (np.full(nf, 1.0 / nf) if k == 0
-             else fenv.shares * px / fobs["equity"])          # hold what we hold
-        fobs, _, fdone, finfo = fenv.step(w)
-        scaled += int(finfo["leverage_scaled"] < 1.0)
-        repairs += sum(1 for r in finfo["fills"] if r["reason"] == "risk_cap")
-        if fdone:
-            break
-    net = float(np.sum(fenv.shares * flat.close[fenv.t])) / fenv.equity
-    check("a 1.0-gross book on a flat market never self-deleverages",
-          scaled == 0 and repairs == 0 and net > config.MAX_NET_LEV,
-          "net settled at %.5f (cash $%.2f), %d scale events, %d risk_cap trades"
-          % (net, fenv.cash, scaled, repairs))
+    # the rest of the run — inside LEV_EPS, so nothing should trade.
+    # Two things this test has to get right or it passes for the wrong reason:
+    #   • count EVERY reducing fill, not just the ones tagged "risk_cap" — the
+    #     leverage trim issues its cuts under the strategy's own reason tag;
+    #   • run it where LEV_EPS*equity comfortably exceeds MIN_POSITION_USD, or the
+    #     churn order dies in the dust filter and the breach hides at small size.
+    big_cash = 2_000_000.0
+    assert config.LEV_EPS * big_cash > config.MIN_POSITION_USD, "test cannot bind"
+    saved_cash = config.START_CASH
+    config.START_CASH = big_cash
+    try:
+        flat = flat_market()
+        fenv = MarketEnv(flat, CostModel())
+        fobs = fenv.reset()
+        nf = len(flat.symbols)
+        scaled = reducing = 0
+        for k in range(40):
+            px = flat.close[fobs["t"]]
+            w = (np.full(nf, 1.0 / nf) if k == 0
+                 else fenv.shares * px / fobs["equity"])      # hold what we hold
+            fobs, _, fdone, finfo = fenv.step(w)
+            scaled += int(finfo["leverage_scaled"] < 1.0)
+            reducing += sum(1 for r in finfo["fills"]
+                            if abs(r["weight_after"]) < abs(r["weight_before"]))
+            if fdone:
+                break
+        net = float(np.sum(fenv.shares * flat.close[fenv.t])) / fenv.equity
+        end_cash = fenv.cash
+    finally:
+        config.START_CASH = saved_cash
+    check("a book held exactly at the net cap never self-deleverages",
+          scaled == 0 and reducing == 0 and net > config.MAX_NET_LEV,
+          "$%.0fk account: net settled at %.5f (cash $%.2f), %d scale events, "
+          "%d reducing trades" % (big_cash / 1e3, net, end_cash, scaled, reducing))
 
     # The 8-symbol market cannot reach MAX_POSITIONS, so the count cap gets its
     # own short run on a wider one.

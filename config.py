@@ -83,7 +83,12 @@ MIN_DOLLAR_VOL = 5_000_000.0        # liquidity gate (avg daily $ volume)
 # signal_lab/universe.py
 ETFS = [BENCHMARK] + SECTOR_ETFS    # noqa: F821 (from the sell_in_may re-export)
 CRYPTO = []                         # arena is stocks-only: no weekend calendar to fold in
-USE_LIVE_SP500_LIST = True          # universe.py tries Wikipedia, falls back to the list below
+# Off on purpose. A live fetch inside an evaluation path is non-reproducible, and
+# universe.py writes what it fetches to DATA_DIR/sp500.csv — which points at
+# signal_lab's data dir, so an arena run would overwrite a sibling's cache. The
+# static fallback below is the deterministic choice; point-in-time membership is
+# the named upgrade path (see DESIGN risks: survivorship bias).
+USE_LIVE_SP500_LIST = False
 LARGECAP_FALLBACK = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "JPM", "V",
     "UNH", "XOM", "MA", "JNJ", "HD", "PG", "COST", "ABBV", "MRK", "CVX",
@@ -117,6 +122,9 @@ for _d in (STATE_DIR, ARTIFACT_DIR, OUTPUT_DIR):
 
 # ── data window & universe ─────────────────────────────────────────────────────
 SEED = _sm.SEED                     # 12345 — the single reproducibility seed
+# Pinned here rather than inherited: borrow and margin are priced per trading day
+# (annual rate / this), and that must not silently follow a sibling project's edit.
+TRADING_DAYS_YEAR = 252
 DATA_START = "1995-01-01"           # start of the replayed sandbox history
 UNIVERSE_SIZE = 120                 # symbols carried into the full-fidelity evaluation
 VAULT_START = "2020-01-01"          # days >= this are the vault: gates only, never fitness

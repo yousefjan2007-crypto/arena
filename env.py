@@ -221,18 +221,28 @@ class MarketEnv:
         """Whole-share rounding of a SHORT reduces |short|, which can push net
         leverage back over its cap. Cut whole shares off the largest position on
         the offending side until the actual share book fits. Deterministic,
-        bounded, and only ever reduces |shares|."""
+        bounded, and only ever reduces |shares|.
+
+        THE BAND LIVES HERE, and both call sites (the strategy's target and the
+        realized-book repair) go through it: fire only past cap*(1+LEV_EPS), then
+        trim all the way back to the strict cap. Enforcing strictly here would
+        undo the band entirely — a strategy restating its own book runs sum(w)
+        slightly over 1.0 whenever cash is negative, and this trim would shave a
+        share off it every single day (invisibly tagged "rebalance", and only
+        hidden at small account sizes because the order dies in the dust filter).
+        """
         px = np.where(np.isfinite(close_t), close_t, 0.0)
         tol = config.ACCOUNT_TOL
+        band = 1.0 + config.LEV_EPS
         gross_cap = config.MAX_GROSS_LEV * equity_t
         net_cap = config.MAX_NET_LEV * equity_t
         for _ in range(config.ENV_MAX_TRIM_ITERS):
             val = tgt * px
             gross, net = float(np.abs(val).sum()), float(val.sum())
-            if gross > gross_cap + tol:
+            if gross > gross_cap * band + tol:
                 excess = gross - gross_cap
                 j = int(np.argmax(np.abs(val)))
-            elif abs(net) > net_cap + tol:
+            elif abs(net) > net_cap * band + tol:
                 excess = abs(net) - net_cap
                 side = 1.0 if net > 0 else -1.0     # shrink the heavy side
                 j = int(np.argmax(np.where(np.sign(val) == side, np.abs(val), -1.0)))
@@ -259,16 +269,9 @@ class MarketEnv:
         if over.any():
             allowed = np.trunc(cap_usd / np.where(px > 0.0, px, np.inf))
             want = np.where(over, np.sign(want) * allowed, want)
-        # Leverage repair fires only outside the hysteresis band, then trims all
-        # the way to the strict cap. A book targeting exactly the cap ends each
-        # day a hair over it (whole-share rounding, costs, overnight gaps); without
-        # the band it would sell a share every single day chasing that hair.
-        val = want * px
-        band = 1.0 + config.LEV_EPS
-        if (float(np.abs(val).sum()) > config.MAX_GROSS_LEV * band * equity_t
-                or abs(float(val.sum())) > config.MAX_NET_LEV * band * equity_t):
-            want = self._trim_to_leverage(want, close_t, equity_t)
-        return want
+        # Leverage: _trim_to_leverage owns the hysteresis band, so this is a
+        # no-op unless the realized book is outside it.
+        return self._trim_to_leverage(want, close_t, equity_t)
 
     def _execute(self, tgt, ctx, reason: str, dust_filter: bool = True):
         """Trade the book toward `tgt` at the next open. `ctx` carries the row of
@@ -454,6 +457,7 @@ if __name__ == "__main__":
     n = len(md.symbols)
     close = md.close
     equity = [obs["equity"]]
+    path_dates = [obs["date"]]
     w = np.zeros(n)
     done = False
     while not done:
@@ -471,6 +475,7 @@ if __name__ == "__main__":
             w = np.where(np.isfinite(px), env.shares * px / obs["equity"], 0.0)
         obs, reward, done, info = env.step(w)
         equity.append(obs["equity"])
+        path_dates.append(obs["date"])
 
     eq = np.array(equity)
     peak = np.maximum.accumulate(eq)
@@ -497,6 +502,31 @@ if __name__ == "__main__":
     print("                total $%.0f = %.1f%% of gross P&L  (%d log rows)"
           % (total_cost, 100 * total_cost / gross_pnl if gross_pnl else float("nan"), len(log)))
 
+    # Replay the whole run from the decision log alone — the audit an outsider
+    # could do — and report the worst end-of-day deviation. Over ~7,900 marks this
+    # is the real answer on float accumulation, not a one-point tautology.
+    eq_at = dict(zip(path_dates, equity))
+    sym_ix = {s: j for j, s in enumerate(md.symbols)}
+    r_cash, r_shares = float(config.START_CASH), np.zeros(n)
+    worst_replay, marks, cur = 0.0, 0, None
+
+    def _mark(date):
+        i = int(md.dates.searchsorted(date))
+        return r_cash + float(np.sum(np.where(r_shares != 0.0, r_shares * close[i], 0.0)))
+
+    for row in log:
+        if cur is not None and row["date"] != cur and cur in eq_at:
+            worst_replay = max(worst_replay, abs(_mark(cur) - eq_at[cur]))
+            marks += 1
+        if row["side"] == "carry":
+            r_cash -= row["borrow"]
+        else:
+            r_cash -= row["shares"] * row["fill_px"] + row["commission"]
+            r_shares[sym_ix[row["symbol"]]] += row["shares"]
+        cur = row["date"]
+    replay_final = abs(_mark(md.dates[env.t]) - env.equity)
+    worst_replay = max(worst_replay, replay_final)
+
     # Invariant check, recomputed from scratch rather than trusted.
     pos_val = float(np.sum(np.where(env.shares != 0.0, env.shares * close[env.t], 0.0)))
     identity = abs(env.equity - (env.cash + pos_val))
@@ -506,7 +536,13 @@ if __name__ == "__main__":
     print("  invariants  : equity identity %.2e | whole shares %s | %d/%d positions | "
           "gross %.2fx" % (identity, integral, n_open, config.MAX_POSITIONS,
                            gross / env.equity))
-    ok = identity <= config.ACCOUNT_TOL and integral and n_open <= config.MAX_POSITIONS
+    print("  log replay  : max |equity - replay| = $%.2e over %d marks "
+          "(final $%.2e, book %s)"
+          % (worst_replay, marks, replay_final,
+             "matches" if np.array_equal(r_shares, env.shares) else "DIFFERS"))
+    ok = (identity <= config.ACCOUNT_TOL and integral and n_open <= config.MAX_POSITIONS
+          and np.array_equal(r_shares, env.shares)
+          and worst_replay <= config.ACCOUNT_TOL * eq[-1] / config.START_CASH)
     print("  result      :", "PASS" if ok else "FAIL")
     print("\n  Sandbox output is a claim about the past, not a guarantee — and not")
     print("  financial advice. This book is a fixed smoke test, never selected or")
