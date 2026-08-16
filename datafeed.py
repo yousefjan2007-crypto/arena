@@ -63,6 +63,10 @@ class MarketData:
         self.features = dict(features) if features else {}
         _check_integrity(self)
         self.data_hash = _hash_market(self)
+        # History is immutable once loaded: a strategy handed an obs row must not
+        # be able to rewrite the past it is being scored against.
+        for arr in (self.open, self.close, self.volume, self.dollar_vol):
+            arr.setflags(write=False)
 
     def __len__(self) -> int:
         return len(self.dates)
