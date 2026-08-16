@@ -192,6 +192,18 @@ MUT_MAX_TRIES = 4                   # bound on re-drawing a mutation that change
                                     # (a genome sitting on the n_long+n_short floor can
                                     # have single steps undone by the repair)
 
+# ── strategy mechanics (strategy.py) ───────────────────────────────────────────
+# The genome owns WHICH overlay is on and how hard; these are the fixed mechanics
+# every genome shares, so they belong here rather than in the search space.
+REALIZED_VOL_DAYS = 21              # window for inv_vol weighting and vol targeting
+VOL_TARGET_MIN = 0.25               # vol targeting may not shrink gross below this...
+VOL_TARGET_MAX = 2.0                # ...nor inflate it beyond this
+TREND_MA_DAYS = 200                 # the 200DMA behind spy_200dma and the trend gate
+VIX_PCT_LIMIT = 0.80                # panel vix_pct above this is the fear regime
+DD_DERISK_SCALE = 0.5               # a dd_limit breach halves gross...
+DD_RECOVER_FRAC = 0.5               # ...until drawdown recovers inside this fraction of it
+LOGIT_MAX_ITER = 200                # lbfgs iterations for the logistic family
+
 # ── promotion gates (docs/DESIGN.md table G1-G10) ──────────────────────────────
 GATE_MIN_DSR = 0.95                 # G2  pre-vault deflated Sharpe
 GATE_VAULT_MIN_DSR = 0.90           # G3  vault Sharpe > 0 and vault DSR >= this
