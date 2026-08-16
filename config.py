@@ -22,6 +22,7 @@ then borrows the existing Telegram/ntfy secrets from vrp_backtest.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -72,6 +73,12 @@ CACHE_DIR = _sm.CACHE_DIR
 # The re-export above clobbered ROOT/OUTPUT_DIR with sell_in_may's paths. Restore
 # arena's ROOT before deriving any arena directory from it.
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# Everything the re-export brought in. config_hash() (bottom of this file) hashes
+# what arena itself declares BELOW this line, not a sibling project's option-pricing
+# knobs — sell_in_may bumps TARGET_YEAR every January, and an arena result must not
+# stop being like-for-like because of it.
+_INHERITED = frozenset(globals())
 
 # ── superset: attributes the reused sibling modules read as config.X ───────────
 # signal_lab/features.py
@@ -180,6 +187,28 @@ PARSIMONY_PENALTY = 0.01            # Sharpe penalty per feature (complexity tax
 GEN_TIME_BUDGET_MIN = 180
 N_JOBS = 8                          # 8 on the Mac booster; the cloud runner sets 4
 
+# ── the evaluation ladder (evaluate.py) ────────────────────────────────────────
+# F0 is a SCREEN, not a measurement: three disjoint five-year eras, a smaller
+# point-in-time universe, and coarse cadences, chosen so a 64-genome population
+# can be ranked in minutes rather than a day. Every era ends before VAULT_START —
+# evaluate.py asserts it rather than trusting this comment.
+SCREEN_ERAS = [("1997-01-01", "2001-12-31"),      # dot-com run-up and bust
+               ("2007-01-01", "2011-12-31"),      # GFC and the recovery
+               ("2015-01-01", "2019-12-31")]      # low-vol grind + 2018 shakeout
+SCREEN_UNIVERSE_N = 60              # symbols per era, ranked point-in-time (see below)
+SCREEN_REFIT_DAYS = 252             # F0 forces yearly refits whatever the genome asks
+SCREEN_MIN_REBALANCE_DAYS = 5       # ...and at most weekly rebalancing
+SCREEN_LIQUIDITY_DAYS = 252         # trailing window for the era's dollar-volume rank
+SCREEN_LIQUIDITY_MIN_BARS = 21      # a symbol needs this many bars in it to be ranked
+# Below this many scored days a Sharpe is noise, and evaluate.sharpe returns 0.0
+# ("no evidence") rather than a number selection could act on.
+SHARPE_MIN_OBS = 60
+# Empirical trial-Sharpe dispersion needs a sample; under this many F1 rows the
+# ledger falls back to 1/sqrt(n_trials) (ledger.trial_sr_std explains why).
+TRIAL_SR_STD_MIN_ROWS = 8
+# run_generation refuses to evaluate on a cache older than this (calendar days).
+MAX_DATA_STALENESS_DAYS = 5
+
 # Genome operators (docs/DESIGN.md "Operators"). These are INDEPENDENT per-move
 # probabilities, not a distribution — they sum past 1 on purpose, so one child can
 # carry two moves. genome.mutate() forces a single weighted move when none fire.
@@ -235,6 +264,62 @@ RUIN_MC_YEARS = 2
 # "sandbox" -> "paper" -> "live". Going live is a human-only flip; nothing in this
 # repo ever writes "live" here.
 EXECUTION_MODE = "sandbox"
+
+
+# ── configuration identity (gate G1 / the trial ledger) ────────────────────────
+# Two results are comparable only if they were produced under the same rules. The
+# DATA identity is datafeed's data_hash and features' panel_hash; this is the other
+# half — the SETTINGS identity, recorded on every ledger row.
+#
+# COVERS: every UPPERCASE name arena's own config declares (everything below
+# _INHERITED) whose value is a scalar or a nested list/tuple of scalars — the
+# account, every friction, the leverage and position caps, the walk-forward and
+# CV constants, the whole evolution and evaluation ladder, the gate thresholds,
+# the universe lists, and EXECUTION_MODE. Plus the two inherited names that bind
+# the simulation anyway (_CONFIG_HASH_EXTRA).
+#
+# DOES NOT COVER: filesystem paths and machine identity (a result is not different
+# because it ran in a different directory), the parallelism/time budget knobs (how
+# fast, not what), the invariant-assertion toggle (it can only raise, never change
+# a number), sell_in_may's own knobs, and anything not JSON-scalar-shaped. It also
+# cannot see a CODE change — that is git's job, not this hash's.
+_CONFIG_HASH_SKIP = frozenset({
+    "STATE_DIR", "ARTIFACT_DIR", "OUTPUT_DIR", "DATA_DIR",   # where files live
+    "N_JOBS", "GEN_TIME_BUDGET_MIN",                # how fast, not what
+    "ENV_CHECK_INVARIANTS",                         # asserts, never arithmetic
+})
+_CONFIG_HASH_EXTRA = ("SEED", "BENCHMARK")          # inherited, but load-bearing
+
+
+def _canon(value):
+    """Canonical text for a config value, or None if it is not hash-shaped."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return repr(value)                  # repr round-trips floats exactly in py3
+    if isinstance(value, (list, tuple)):
+        parts = [_canon(v) for v in value]
+        return None if any(p is None for p in parts) else "[%s]" % ",".join(parts)
+    return None
+
+
+def config_hash_items() -> list:
+    """The exact (name, canonical value) pairs config_hash() digests, sorted."""
+    names = (set(globals()) - _INHERITED) | set(_CONFIG_HASH_EXTRA)
+    out = []
+    for name in sorted(names):
+        if name.startswith("_") or not name.isupper() or name in _CONFIG_HASH_SKIP:
+            continue
+        canon = _canon(globals()[name])
+        if canon is not None:
+            out.append((name, canon))
+    return out
+
+
+def config_hash() -> str:
+    """sha256 over the sorted (name, value) list above, first 16 hex chars."""
+    h = hashlib.sha256()
+    for name, canon in config_hash_items():
+        h.update(("%s=%s\n" % (name, canon)).encode())
+    return h.hexdigest()[:16]
 
 
 # ── credential loading (no secrets in source) ──────────────────────────────────
@@ -301,6 +386,10 @@ if __name__ == "__main__":
             _mod, ", config.".join(_missing))
         print("    [ok] %-9s <- %-11s %2d config attrs resolved"
               % (_mod, os.path.basename(_proj), len(_attrs)))
+
+    _items = config_hash_items()
+    print("  config_hash: %s  (%d settings: %s ...)"
+          % (config_hash(), len(_items), ", ".join(n for n, _ in _items[:5])))
 
     _c = load_credentials()
     print("  creds      : ntfy=%s telegram=%s anthropic_key=%s" % (
