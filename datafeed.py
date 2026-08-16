@@ -75,9 +75,6 @@ class MarketData:
     def shape(self) -> tuple:
         return self.close.shape
 
-    def index_of(self, symbol: str) -> int:
-        return self.symbols.index(symbol)
-
     def pos(self, when, side: str = "left") -> int:
         """Calendar index for a date. side="left" -> first date >= when,
         side="right" -> last date <= when. Used to turn a start/end into ints."""
