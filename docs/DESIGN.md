@@ -135,8 +135,8 @@ constants): `SEED=12345`; `DATA_START="1995-01-01"`; `UNIVERSE_SIZE=120`;
 `VAULT_START="2020-01-01"`; `START_CASH=15_000` (mid of user's $10–25K,
 conservative); `MAX_GROSS_LEV=1.5, MAX_NET_LEV=1.0, MAX_POSITIONS=20,
 MAX_NAME_WEIGHT=0.20, MIN_POSITION_USD=500, WHOLE_SHARES=True`;
-`COMMISSION_PER_SHARE=0.005, COMMISSION_MIN=1.00, HALF_SPREAD_BPS=2.5,
-HALF_SPREAD_FLOOR=0.005, SLIPPAGE_BPS=2.0, BORROW_ANNUAL=0.01,
+`COMMISSION_BPS=0.5, COMMISSION_MIN=1.00, HALF_SPREAD_BPS=2.5,
+LEV_EPS=0.01, SLIPPAGE_BPS=2.0, BORROW_ANNUAL=0.01,
 MARGIN_ANNUAL=0.065, NO_INTRADAY_EXITS=True`; `WF_MIN_TRAIN_DAYS=1008,
 WF_EMBARGO_DAYS=21`; the four `CV_*` constants signal_lab's `cv.py` import
 needs; `CPCV_GROUPS=8, CPCV_K=2, PBO_SPLITS=16, BOOT_ITERS=5000,
@@ -423,6 +423,14 @@ financial advice."
 - **Small-account sensitivity:** $1 min commissions + whole-share rounding are
   5–10 bps each way on small positions; 2× stress gate + per-report "cost
   share of gross" line keep it visible. PDT avoided structurally.
+- **Cost model is proportional (bps), not per-share** (amended in Phase 1):
+  the price history is split-adjusted, so a $/share friction silently
+  becomes hundreds of bps on 1990s adjusted prices of high-split names — a
+  cross-sectional bias concentrated in the early screen eras. All frictions
+  are therefore bps of notional (commission floored at $1). Real 1990s
+  spreads were wider than modern bps; the 2× cost-stress gate (G7) is the
+  standing defense, and any edge that survives only at modern costs is
+  suspect by construction.
 - **yfinance fragility:** cache-first; abort (with alert) rather than run >5
   days stale; certifi SSL idiom for any direct urllib. The cloud runner keeps
   its own committed cache copy so a bad yfinance day degrades to stale-cache,
