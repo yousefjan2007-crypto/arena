@@ -29,13 +29,37 @@ staleness bound for the duration of the build: refreshing the cache is
 run_generation.py's job, before anything gets evaluated.
 
 CACHING. The pivoted result is joblib-cached under state/panel_cache/ keyed by
-(market.data_hash, asof) — the two things it depends on. Every build round-trips
-through the cache file before returning, so the arrays a fresh build hands back
-are byte-identical to the ones a later run loads.
+(market.data_hash, asof). Every build round-trips through the cache file before
+returning, so the arrays a fresh build hands back are byte-identical to the ones
+a later run loads.
+
+IDENTITY: `market.panel_hash` IS THE LIKE-FOR-LIKE KEY FOR GATE G1, NOT
+`data_hash`. datafeed's `data_hash` covers the equity bars only — the symbol
+list, the calendar ends, each symbol's bar count and last close. The panel also
+depends on six macro tickers (^TNX ^IRX ^VIX DX-Y.NYB HYG LQD) that data_hash
+never sees, so two runs could agree on data_hash and still have been scored on
+different features. `panel_hash` closes that: sha256 over data_hash followed by
+every (feature name, array bytes) pair in canonical name order, so it is a
+digest of exactly what the strategy was handed — data AND features AND macro.
+G1 must compare panel_hash; data_hash stays as it is and keeps its own meaning.
+
+NaN bytes are canonicalised before hashing (every NaN, whatever payload or sign
+the producing libm chose, is written as one bit pattern; infinities are left
+alone), so the digest cannot differ over a NaN payload two platforms disagree
+about. Float VALUES can still differ across platforms — that is the standing
+per-platform determinism caveat in DESIGN, and the cloud is canonical.
+
+Why (data_hash, asof) is still a sufficient CACHE key even though it is an
+insufficient G1 key: the cache is a memo, not an identity. A macro-only cache
+restatement could serve a panel built from slightly older macro bars — and
+because panel_hash is computed from the arrays actually attached, whether they
+came from disk or from a fresh build, that panel is still recorded for exactly
+what it is. The cache can only make two runs agree, never disagree silently.
 """
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 
 import joblib
@@ -138,6 +162,26 @@ def _to_grid(panel: pd.DataFrame, market) -> tuple:
     return names, grid
 
 
+def panel_hash(data_hash: str, names, grid) -> str:
+    """Content digest of the data AND the features built from it — see the module
+    docstring: this, not data_hash, is what gate G1 compares.
+
+    Canonical feature-name order (so the digest does not depend on dict order) and
+    canonicalised NaN bytes (so it does not depend on which NaN bit pattern the
+    producing library chose). Infinities are hashed as they are — an inf carries
+    real information about a feature and should move the digest.
+    """
+    h = hashlib.sha256()
+    h.update(data_hash.encode())
+    for name in names:
+        arr = grid[name]
+        clean = arr.copy()
+        np.copyto(clean, np.array(np.nan, dtype=arr.dtype), where=np.isnan(clean))
+        h.update(name.encode())
+        h.update(clean.tobytes())
+    return h.hexdigest()[:16]
+
+
 def _cache_file(data_hash: str, asof: pd.Timestamp) -> str:
     return os.path.join(PANEL_CACHE_DIR, "panel_%s_%s.joblib" % (data_hash, asof.strftime("%Y%m%d")))
 
@@ -191,6 +235,9 @@ def build_features(market, asof=None) -> None:
         arr.setflags(write=False)                    # history is immutable, features too
         market.features[name] = arr
     market.feature_names = payload["feature_names"]
+    # Computed from the arrays actually attached, cache hit or miss, so it always
+    # describes what the strategy was really handed. This is the G1 identity.
+    market.panel_hash = panel_hash(market.data_hash, market.feature_names, market.features)
 
 
 if __name__ == "__main__":
@@ -207,6 +254,9 @@ if __name__ == "__main__":
           "... (seasonal column: %s%s)"
           % (SEASONAL_COL, "" if SEASONAL_COL in md.feature_names else " MISSING"))
     print("  dropped     :", ", ".join(NON_FEATURES))
+    print("  data_hash   : %s   (equity bars only — NOT the G1 identity)" % md.data_hash)
+    print("  panel_hash  : %s   (data + features + macro — gate G1 compares this)"
+          % md.panel_hash)
     print("  cache       :", os.path.relpath(_cache_file(md.data_hash, md.dates[-1]), config.ROOT))
 
     dense = {k: float(np.isfinite(v).mean()) for k, v in md.features.items()}
@@ -222,5 +272,7 @@ if __name__ == "__main__":
                                          asof=md.dates[-1])
     names, grid = _to_grid(panel, md)
     same = (names == md.feature_names
-            and all(grid[k].tobytes() == md.features[k].tobytes() for k in names))
-    print("  byte-stable : %s (recomputed panel vs cached load)" % ("PASS" if same else "FAIL"))
+            and all(grid[k].tobytes() == md.features[k].tobytes() for k in names)
+            and panel_hash(md.data_hash, names, grid) == md.panel_hash)
+    print("  byte-stable : %s (recomputed panel vs cached load, incl. panel_hash)"
+          % ("PASS" if same else "FAIL"))

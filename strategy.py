@@ -10,14 +10,18 @@ business, and a genome cannot talk its way past any of them.
 
 FOUR THINGS DECIDED HERE, EACH WITH A REASON:
 
-1. SCORES ARE CENTRED. The rule families score by cross-sectional percentile rank
-   minus 0.5, so zero means "the median name today" and the sign is meaningful.
-   A raw 0..1 rank would make "never short a positive score" reject every short a
-   rule family could ever take, and would make score-proportional weighting rank
-   a 99th-percentile name barely above a 51st. The model families need no
-   centring: a predicted return and a P(top) − P(bottom) spread are already
-   signed. Selection then requires score > 0 to go long and < 0 to go short —
-   the "no forced sign flips" rule, which also drops gated-out names (score 0).
+1. RULE SCORES ARE CENTRED — `pct_rank - 0.5`, NOT a raw 0..1 percentile rank —
+   so that zero means "the median name today" and the sign of a score is a
+   direction rather than an artefact of the scale. DO NOT "correct" this back to
+   a raw rank: the selection rule below never shorts a positive score, so on a
+   raw rank every rule genome would be silently long-only, and meanrev's trend
+   gate ("only names below their 200DMA get a short score") would be unreachable
+   code. Centring is also what makes score-proportional weighting meaningful — on
+   a raw rank a 99th-percentile name would weigh barely more than a 51st. The
+   model families need no centring: a predicted return and a P(top) − P(bottom)
+   spread are already signed. Selection then requires score > 0 to go long and
+   < 0 to go short — the "no forced sign flips" rule, which also drops gated-out
+   names (score exactly 0).
 
 2. HOLDING RESTATES THE INTENDED WEIGHTS, NOT THE BOOK. Between rebalances the
    agent re-sends the weights it last chose (minus anything stopped out, times
