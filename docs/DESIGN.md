@@ -339,11 +339,17 @@ financial advice."
 
 ## verify.py (must pass before anything is scheduled)
 
-1. **Planted leak through the full env+eval path:** a poisoned `leak_fwd`
-   feature (next-h-day return, test-only library) scores absurdly under naive
-   pooled KFold but its edge collapses under the streaming purged walk-forward;
-   plus asof-invariance of the production panel builder (mirrors
-   `signal_lab/verify.py::test_leakage`).
+1. **Planted leak through the full env+eval path** (amended in Phase 3 —
+   the original wording asserted the impossible): the streaming purged
+   walk-forward defends against FIT-time leakage, not act-time leakage. A
+   label-overlap leak that inflates a naive pooled evaluator (IC ≈ 0.5)
+   must collapse to ≈ 0 through the arena's streaming purged path. A
+   feature that *is* the future return (`leak_fwd`) wins at act time no
+   matter how the model was fit — the test pins that behavior explicitly
+   and documents the structural defense: act-time-leaky features cannot
+   exist in the production panel (PIT builder, proven upstream by
+   `signal_lab/verify.py::test_pointintime`); the arena's test-only
+   injection path is the only way to create one.
 2. **Determinism:** 2 generations on a synthetic 10-symbol market, same SEED,
    run twice → identical genome hashes, byte-identical returns .npz, identical
    ledger.
