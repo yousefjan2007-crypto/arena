@@ -764,7 +764,10 @@ def test_trial_ledger():
     try:
         rng = np.random.default_rng(config.SEED)
         genomes = [gn.random_genome(rng, FEATURE_LIB) for _ in range(6)]
-        evals = [(g, fid) for g in genomes for fid in ("F0", "F1")]
+        # Mixed fidelities on purpose, including one genome that was screened and
+        # dropped (F0 only) — it still exerted selection and still has to count.
+        screened_only = gn.random_genome(rng, FEATURE_LIB)
+        evals = [(g, fid) for g in genomes for fid in ("F0", "F1")] + [(screened_only, "F0")]
         written = sum(ledger.record_trial(0, g, fid, 0.4 + 0.02 * i, 0.3 + 0.02 * i,
                                           1200, "d" * 16, "p" * 16)
                       for i, (g, fid) in enumerate(evals))
@@ -783,14 +786,33 @@ def test_trial_ledger():
         check("identical re-run appends nothing (hot and cold)",
               again == 0 and cold == 0 and len(ledger.read_ledger()) == rows,
               "%d + %d new rows, still %d on disk" % (again, cold, len(ledger.read_ledger())))
+        n_genomes = len(genomes) + 1                 # + the screened-and-dropped one
         check("n_trials counts distinct genomes, not rows",
-              ledger.n_trials() == len(genomes),
+              ledger.n_trials() == n_genomes,
               "%d genomes over %d rows (screens count: they exerted selection)"
               % (ledger.n_trials(), rows))
+
+        # DSR's N must be every genome the search looked at, not every genome that
+        # survived to F1 — otherwise the correction ignores exactly the trials that
+        # made the survivor look good. Coupled by construction, pinned here.
+        dsr_s = ledger.dsr_trial_sharpes()
+        f1_s = ledger.f1_sharpes()
+        best = {g.hash(): 0.3 + 0.02 * i for i, (g, fid) in enumerate(evals) if fid == "F1"}
+        best[screened_only.hash()] = 0.3 + 0.02 * (len(evals) - 1)     # F0 is its best
+        expect = np.array(sorted(best.values())) / np.sqrt(config.TRADING_DAYS_YEAR)
+        check("dsr_trial_sharpes: one value per genome, N == n_trials()",
+              len(dsr_s) == ledger.n_trials() == n_genomes and len(f1_s) == len(genomes),
+              "%d DSR trials (= n_trials) vs %d F1 rows; the screened-and-dropped "
+              "genome is in the first and not the second" % (len(dsr_s), len(f1_s)))
+        check("dsr_trial_sharpes: best fidelity per genome, in DAILY units",
+              np.allclose(np.sort(dsr_s), expect),
+              "F1 row wins over the genome's F0 row; annualised /sqrt(%d) "
+              "(max %.4f daily vs %.4f annualised)"
+              % (config.TRADING_DAYS_YEAR, dsr_s.max(), f1_s.max()))
         check("trial_sr_std falls back below %d F1 rows" % config.TRIAL_SR_STD_MIN_ROWS,
-              abs(ledger.trial_sr_std() - 1.0 / np.sqrt(len(genomes))) < 1e-12,
+              abs(ledger.trial_sr_std() - 1.0 / np.sqrt(n_genomes)) < 1e-12,
               "%d F1 rows -> 1/sqrt(%d) = %.4f"
-              % (len(ledger.f1_sharpes()), len(genomes), ledger.trial_sr_std()))
+              % (len(ledger.f1_sharpes()), n_genomes, ledger.trial_sr_std()))
         # The ledger stores ANNUALISED Sharpes; deflated_sharpe works in DAILY
         # ones. Get that wrong and gate G2 rejects everything forever while
         # looking healthy, so the conversion is pinned here.
@@ -824,6 +846,23 @@ def test_trial_ledger():
               ledger.vault_trials() == 2,
               "3 accesses by 2 distinct genomes -> vault_trials = %d"
               % ledger.vault_trials())
+
+        # Every ledger row stamps config_hash, so a knob missing from that digest
+        # is a row claiming like-for-like when it is not. The dangerous class is
+        # the names arena REDECLARES on top of the sell_in_may re-export with the
+        # SAME value (TRADING_DAYS_YEAR = 252, SEED = 12345): invisible to any
+        # value-based test, and TRADING_DAYS_YEAR scales every Sharpe on record.
+        sm = config.import_sibling("config", config.SELL_IN_MAY)
+        shadowed = sorted(n for n in config._DECLARED_HERE            # noqa: SLF001
+                          if n in vars(sm) and n not in config._CONFIG_HASH_SKIP  # noqa: SLF001
+                          and config._canon(getattr(config, n)) is not None)      # noqa: SLF001
+        covered = dict(config.config_hash_items())
+        missing = [n for n in shadowed if n not in covered]
+        check("config_hash covers every knob arena redeclares over a sibling's",
+              not missing and "TRADING_DAYS_YEAR" in covered,
+              "missing: %s" % ", ".join(missing) if missing else
+              "%d shadowed (%s) all in the %d-setting digest %s"
+              % (len(shadowed), ", ".join(shadowed), len(covered), config.config_hash()))
 
         # The returns matrix refuses to store anything the vault owns.
         dates = pd.bdate_range("2019-11-01", periods=60)             # crosses 2020-01-01

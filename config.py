@@ -26,6 +26,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
 
 # ── locate sibling projects ────────────────────────────────────────────────────
@@ -74,11 +75,18 @@ CACHE_DIR = _sm.CACHE_DIR
 # arena's ROOT before deriving any arena directory from it.
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# Everything the re-export brought in. config_hash() (bottom of this file) hashes
-# what arena itself declares BELOW this line, not a sibling project's option-pricing
-# knobs — sell_in_may bumps TARGET_YEAR every January, and an arena result must not
-# stop being like-for-like because of it.
-_INHERITED = frozenset(globals())
+# Everything the re-export brought in, NAME -> VALUE. config_hash() (bottom of this
+# file) hashes what arena itself declares BELOW this line, not a sibling project's
+# option-pricing knobs — sell_in_may bumps TARGET_YEAR every January, and an arena
+# result must not stop being like-for-like because of it.
+#
+# The values, not just the names: a bare name set silently drops every knob arena
+# REDECLARES (the name is in both), and three are — OUTPUT_DIR, SEED and
+# TRADING_DAYS_YEAR. Losing TRADING_DAYS_YEAR from the digest is the dangerous one:
+# it scales every Sharpe in the ledger and the daily/annual conversion in
+# ledger.trial_sr_std, so changing it would change every score while the config
+# hash stayed put — precisely the like-for-like failure gate G1 exists to catch.
+_INHERITED = dict(globals())
 
 # ── superset: attributes the reused sibling modules read as config.X ───────────
 # signal_lab/features.py
@@ -271,12 +279,23 @@ EXECUTION_MODE = "sandbox"
 # DATA identity is datafeed's data_hash and features' panel_hash; this is the other
 # half — the SETTINGS identity, recorded on every ledger row.
 #
-# COVERS: every UPPERCASE name arena's own config declares (everything below
-# _INHERITED) whose value is a scalar or a nested list/tuple of scalars — the
-# account, every friction, the leverage and position caps, the walk-forward and
-# CV constants, the whole evolution and evaluation ladder, the gate thresholds,
-# the universe lists, and EXECUTION_MODE. Plus the two inherited names that bind
-# the simulation anyway (_CONFIG_HASH_EXTRA).
+# COVERS every UPPERCASE name whose value is a scalar or a nested list/tuple of
+# scalars and that is ARENA'S, by any of three tests:
+#   1. this file assigns it below the _INHERITED marker (_DECLARED_HERE, a source
+#      scan) — the account, every friction, the leverage and position caps, the
+#      walk-forward and CV constants, the whole evolution and evaluation ladder,
+#      the gate thresholds, the universe lists, EXECUTION_MODE;
+#   2. it is not in the inherited snapshot at all;
+#   3. its value differs from the inherited one (a knob arena changed at runtime).
+# Plus _CONFIG_HASH_EXTRA, for inherited names that bind the simulation anyway.
+#
+# Test 1 is not redundant with test 3, and assuming it was is how TRADING_DAYS_YEAR
+# fell out of this digest once already: arena redeclares `TRADING_DAYS_YEAR = 252`
+# and `SEED = 12345`, which are exactly the values sell_in_may already held. A
+# value diff sees no change and drops them — yet they are arena's knobs, arena is
+# free to change either tomorrow, and TRADING_DAYS_YEAR scales every Sharpe on
+# record. The scanner behind test 1 is deliberately dumb (one regex, module level,
+# same idiom as verify.py's wall-clock scan) so that it cannot be clever and wrong.
 #
 # DOES NOT COVER: filesystem paths and machine identity (a result is not different
 # because it ran in a different directory), the parallelism/time budget knobs (how
@@ -288,7 +307,30 @@ _CONFIG_HASH_SKIP = frozenset({
     "N_JOBS", "GEN_TIME_BUDGET_MIN",                # how fast, not what
     "ENV_CHECK_INVARIANTS",                         # asserts, never arithmetic
 })
-_CONFIG_HASH_EXTRA = ("SEED", "BENCHMARK")          # inherited, but load-bearing
+# Inherited, never redeclared here, but the simulation reads them. (SEED is also
+# caught by _DECLARED_HERE now; it stays listed because losing it would be silent.)
+_CONFIG_HASH_EXTRA = ("SEED", "BENCHMARK")
+
+
+def _declared_here() -> frozenset:
+    """UPPERCASE names this FILE assigns at module level below the _INHERITED
+    marker — i.e. arena's own knobs, whatever their values happen to equal.
+
+    Reads its own source rather than reasoning about values, because a
+    redeclaration that repeats the inherited value is invisible to every
+    value-based test (see the comment above). Module level only: the `^` anchor
+    excludes the indented assignments inside the __main__ block, and leading
+    underscores are filtered by config_hash_items.
+    """
+    with open(os.path.abspath(__file__)) as f:
+        lines = f.read().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("_INHERITED"))
+    assign = re.compile(r"^([A-Z][A-Z0-9_]*)\s*(?::[^=]+)?=[^=]")
+    return frozenset(m.group(1) for m in
+                     (assign.match(line) for line in lines[start + 1:]) if m)
+
+
+_DECLARED_HERE = _declared_here()
 
 
 def _canon(value):
@@ -303,13 +345,19 @@ def _canon(value):
 
 def config_hash_items() -> list:
     """The exact (name, canonical value) pairs config_hash() digests, sorted."""
-    names = (set(globals()) - _INHERITED) | set(_CONFIG_HASH_EXTRA)
     out = []
-    for name in sorted(names):
+    for name in sorted(set(globals()) | set(_CONFIG_HASH_EXTRA)):
         if name.startswith("_") or not name.isupper() or name in _CONFIG_HASH_SKIP:
             continue
-        canon = _canon(globals()[name])
-        if canon is not None:
+        value = globals().get(name)
+        canon = _canon(value)
+        if canon is None:
+            continue                        # not JSON-scalar-shaped: nothing to hash
+        arenas = (name in _DECLARED_HERE                       # 1. declared here
+                  or name not in _INHERITED                    # 2. not inherited
+                  or _canon(_INHERITED[name]) != canon         # 3. changed since
+                  or name in _CONFIG_HASH_EXTRA)
+        if arenas:
             out.append((name, canon))
     return out
 
@@ -369,7 +417,6 @@ if __name__ == "__main__":
     # The superset contract: every sibling module arena reuses must find each
     # config.X it reads in THIS module. Import each one, then scan its source for
     # `config.<attr>` — importing alone would miss attributes read at call time.
-    import re
     print("  superset check (siblings resolving `import config` to arena's):")
     for _mod, _proj in [("data", SELL_IN_MAY), ("features", SIGNAL_LAB), ("macro", SIGNAL_LAB),
                         ("universe", SIGNAL_LAB), ("cv", SIGNAL_LAB), ("alerts", SIGNAL_LAB)]:
@@ -390,6 +437,14 @@ if __name__ == "__main__":
     _items = config_hash_items()
     print("  config_hash: %s  (%d settings: %s ...)"
           % (config_hash(), len(_items), ", ".join(n for n, _ in _items[:5])))
+    # The knobs arena redeclares on top of the re-export are the ones a name-only
+    # or value-only test drops. Print them, with whether the digest sees them.
+    _shadowed = sorted(n for n in _DECLARED_HERE
+                       if n in _INHERITED and n not in _CONFIG_HASH_SKIP)
+    _covered = dict(_items)
+    print("  shadowed   : %s" % ", ".join(
+        "%s=%s%s" % (n, _covered.get(n, "?"), "" if n in _covered else " MISSING")
+        for n in _shadowed))
 
     _c = load_credentials()
     print("  creds      : ntfy=%s telegram=%s anthropic_key=%s" % (

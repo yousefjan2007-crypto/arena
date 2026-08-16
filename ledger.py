@@ -3,7 +3,8 @@ The trial ledger: every genome arena ever evaluated, appended and never rewritte
 
     record_trial(...)          one row per (genome, generation, fidelity)
     n_trials()                 distinct genomes ever evaluated  -> DSR's N
-    trial_sr_std()             empirical spread of F1 Sharpes   -> DSR's sigma
+    dsr_trial_sharpes()        one DAILY Sharpe per genome      -> DSR's all_sharpes
+    trial_sr_std()             empirical spread of F1 Sharpes   -> reports
     record_vault_access(...)   every look at post-2020 data, counted
     write_returns_matrix(...)  the Tier-A (days x genomes) artifact DSR/PBO read
 
@@ -158,13 +159,58 @@ def n_trials(state_dir=None) -> int:
 
 
 def f1_sharpes(state_dir=None) -> np.ndarray:
-    """Every F1 pre-vault Sharpe on record — deflated_sharpe's `all_sharpes`."""
+    """Every F1 pre-vault Sharpe on record, ANNUALISED. **NOT DSR-ready.**
+
+    This is the reporting series: the numbers as stored, in the units a human
+    reads. Passing it to deflated_sharpe as `all_sharpes` is wrong twice over —
+    the units are annualised where that function works in daily ones, and the
+    count is F1 rows where the multiple-testing N is every genome ever tried.
+    Use dsr_trial_sharpes() for that; this one is for reports and for
+    trial_sr_std's empirical dispersion.
+    """
     df = read_ledger(state_dir)
     if not len(df):
         return np.array([], dtype=np.float64)
     vals = pd.to_numeric(df.loc[df["fidelity"] == "F1", "sharpe_prevault"],
                          errors="coerce").to_numpy(dtype=np.float64)
     return vals[np.isfinite(vals)]
+
+
+def dsr_trial_sharpes(state_dir=None) -> np.ndarray:
+    """deflated_sharpe's `all_sharpes`: one DAILY Sharpe per genome ever ledgered.
+
+    Two couplings live here, and both are the reason this exists as its own
+    function rather than as something a caller assembles at the call site.
+
+    UNITS. deflated_sharpe computes `sr = mean/std` of a DAILY return series and
+    compares it against a threshold built from `var(all_sharpes)`. This ledger
+    stores annualised Sharpes. Hand it the stored numbers and the threshold comes
+    out sqrt(TRADING_DAYS_YEAR) = 15.9x too wide, sr0 becomes unreachable, and
+    gate G2 rejects every candidate forever while looking perfectly healthy. So
+    the conversion happens here, once, where the units are known.
+
+    N. The multiple-testing count must be every genome the search ever LOOKED at,
+    not every genome that survived to a full evaluation. A genome screened at F0
+    and dropped still exerted selection — it is why the survivor looked good — and
+    a correction that ignores the trials you threw away is not a correction. So
+    this returns exactly one value per distinct genome_hash, and
+    `len(dsr_trial_sharpes()) == n_trials()` holds by construction (verify #8).
+
+    Each genome contributes its BEST-FIDELITY row (F2 > F1 > F0, latest
+    generation on a tie): the most informative estimate on record for that
+    genome. A row whose Sharpe is unreadable contributes 0.0 rather than being
+    dropped — "no evidence" is what evaluate.sharpe already returns for an
+    unscoreable episode, and dropping it would quietly shrink N.
+    """
+    df = read_ledger(state_dir)
+    if not len(df):
+        return np.array([], dtype=np.float64)
+    order = df.assign(_rank=df["fidelity"].map({f: i for i, f in enumerate(FIDELITIES)}))
+    order = order.sort_values(["genome_hash", "_rank", "generation"], kind="mergesort")
+    best = order.groupby("genome_hash", sort=True).tail(1)
+    vals = pd.to_numeric(best["sharpe_prevault"], errors="coerce").to_numpy(dtype=np.float64)
+    vals = np.where(np.isfinite(vals), vals, 0.0)
+    return vals / np.sqrt(config.TRADING_DAYS_YEAR)
 
 
 def trial_sr_std(state_dir=None, daily: bool = False) -> float:
@@ -183,8 +229,11 @@ def trial_sr_std(state_dir=None, daily: bool = False) -> float:
     var(all_sharpes). Feed it annualised dispersion and sigma comes out sqrt(252)
     = 15.9x too wide, sr0 becomes unreachable, and G2 rejects every candidate
     forever while looking like it is working. `daily=True` returns the same
-    dispersion in deflated_sharpe's units; Phase 5 must use it (or pass
-    f1_sharpes() / sqrt(TRADING_DAYS_YEAR) as all_sharpes).
+    dispersion in deflated_sharpe's units.
+
+    This is the F1 dispersion, for reports and for the thin-ledger fallback. The
+    canonical G2 call is `deflated_sharpe(daily_net, dsr_trial_sharpes())`, which
+    also fixes N to n_trials(); do not rebuild `all_sharpes` from this function.
     """
     s = f1_sharpes(state_dir)
     scale = np.sqrt(config.TRADING_DAYS_YEAR) if daily else 1.0
@@ -311,8 +360,13 @@ if __name__ == "__main__":
                     for g in genomes for f in ("F0", "F1"))
         print("  rows        : %d written, %d on an identical re-run (idempotent)"
               % (written, again))
-        print("  n_trials    : %d distinct genomes | trial_sr_std %.4f"
-              % (n_trials(), trial_sr_std()))
+        print("  n_trials    : %d distinct genomes | trial_sr_std %.4f annual / %.4f daily"
+              % (n_trials(), trial_sr_std(), trial_sr_std(daily=True)))
+        _dsr = dsr_trial_sharpes()
+        print("  DSR input   : %d trials (== n_trials: %s), daily units, best fidelity "
+              "per genome, max %.4f (%.3f annualised)"
+              % (len(_dsr), len(_dsr) == n_trials(), _dsr.max(),
+                 _dsr.max() * np.sqrt(config.TRADING_DAYS_YEAR)))
 
         # A mutant of an existing genome, with lineage.
         child = gn.mutate(genomes[0], rng, lib)
