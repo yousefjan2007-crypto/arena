@@ -180,6 +180,18 @@ PARSIMONY_PENALTY = 0.01            # Sharpe penalty per feature (complexity tax
 GEN_TIME_BUDGET_MIN = 180
 N_JOBS = 8                          # 8 on the Mac booster; the cloud runner sets 4
 
+# Genome operators (docs/DESIGN.md "Operators"). These are INDEPENDENT per-move
+# probabilities, not a distribution — they sum past 1 on purpose, so one child can
+# carry two moves. genome.mutate() forces a single weighted move when none fire.
+P_MUT_PARAM = 0.60                  # jitter one param to a grid neighbour
+P_MUT_FEATURE = 0.30                # add / drop / swap one feature
+P_MUT_BLOCK = 0.15                  # resample a whole gene block
+P_MUT_FAMILY = 0.05                 # hop to another signal family
+CROSSOVER_FRAC = 0.25               # share of offspring bred by crossover
+MUT_MAX_TRIES = 4                   # bound on re-drawing a mutation that changed nothing
+                                    # (a genome sitting on the n_long+n_short floor can
+                                    # have single steps undone by the repair)
+
 # ── promotion gates (docs/DESIGN.md table G1-G10) ──────────────────────────────
 GATE_MIN_DSR = 0.95                 # G2  pre-vault deflated Sharpe
 GATE_VAULT_MIN_DSR = 0.90           # G3  vault Sharpe > 0 and vault DSR >= this

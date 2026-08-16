@@ -14,14 +14,19 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here
   6. Cost linearity      the same trade stream at stress_mult 0/1/2 costs
                          exactly 0/c/2c per component, and the frictionless
                          equity path dominates the costed ones pointwise.
+  9. Genome ops          20,000 seeded mutations and crossovers stay inside
+                         BOUNDS, keep n_long+n_short >= 3 and sorted/deduped
+                         3-15 feature subsets (empty for rule families), survive
+                         encode -> decode -> hash unchanged, and derive child
+                         streams reproducibly from (SEED, generation, parent).
  10. No wall-clock       source scan: nothing reads the system clock (calendar
                          `now`, epoch seconds) outside run_*.py I/O boundaries.
                          The literal call spellings are deliberately absent from
                          this file's prose — the scanner is dumb on purpose.
 
 Still to come: 1 planted leak (Phase 3), 2 determinism (Phase 4), 5 streaming
-purge (Phase 3), 7 gates (Phase 5), 8 trial ledger (Phase 3), 9 genome ops
-(Phase 2), 11 PBO sanity (Phase 3).
+purge (Phase 3), 7 gates (Phase 5), 8 trial ledger (Phase 3), 11 PBO sanity
+(Phase 3).
 
 Everything here runs on a synthetic, seeded market. verify.py NEVER touches the
 network or the cache: the test suite must give the same answer on a plane, on a
@@ -38,6 +43,7 @@ import pandas as pd
 
 import config                       # FIRST: puts the siblings on sys.path
 import datafeed
+import genome as gn
 from env import CostModel, MarketEnv
 
 ok = True
@@ -371,6 +377,126 @@ def test_cost_linearity():
           "final $%.2f >= $%.2f >= $%.2f" % (e0[-1], e1[-1], e2[-1]))
 
 
+# ── 9. genome operators ────────────────────────────────────────────────────────
+# A stand-in feature library: verify.py never touches the cache, and the operators
+# only ever treat these as opaque names.
+FEATURE_LIB = tuple("feat_%02d" % i for i in range(37))
+
+
+def _violations(g, lib) -> list:
+    """Every way a genome can be out of spec. Empty list = legal genome."""
+    B = gn.BOUNDS
+    s, p, r = g.signal, g.portfolio, g.risk
+    bad = []
+    if s.family not in B["families"]:
+        bad.append("family=%s" % s.family)
+        return bad                                  # the rest is family-relative
+    if s.horizon not in B["horizon"]:
+        bad.append("horizon=%s" % s.horizon)
+    if s.refit_days not in B["refit_days"]:
+        bad.append("refit_days=%s" % s.refit_days)
+
+    grids = B["params"][s.family]
+    if set(dict(s.params)) != set(grids):
+        bad.append("param keys %s" % sorted(dict(s.params)))
+    for k, v in s.params:
+        if k in grids and v not in grids[k]:
+            bad.append("%s=%s" % (k, v))
+    if tuple(s.params) != tuple(sorted(s.params)):
+        bad.append("params unsorted")
+
+    lo, hi = B["n_features"]
+    if s.family in B["model_families"]:
+        if not (lo <= len(s.features) <= hi):
+            bad.append("n_features=%d" % len(s.features))
+        if list(s.features) != sorted(set(s.features)):
+            bad.append("features unsorted or duplicated")
+        if any(f not in lib for f in s.features):
+            bad.append("feature outside the library")
+    elif s.features:
+        bad.append("rule family carries %d features" % len(s.features))
+
+    for name, value in (("n_long", p.n_long), ("n_short", p.n_short),
+                        ("weighting", p.weighting), ("gross", p.gross),
+                        ("vol_target", p.vol_target), ("rebalance_days", p.rebalance_days)):
+        if value not in B["portfolio"][name]:
+            bad.append("%s=%s" % (name, value))
+    if p.n_long + p.n_short < B["min_positions"]:
+        bad.append("n_long+n_short=%d" % (p.n_long + p.n_short))
+
+    for name, value in (("stop_loss", r.stop_loss), ("trail_stop", r.trail_stop),
+                        ("regime_filter", r.regime_filter), ("regime_scale", r.regime_scale),
+                        ("dd_limit", r.dd_limit)):
+        if value not in B["risk"][name]:
+            bad.append("%s=%s" % (name, value))
+    return bad
+
+
+def test_genome_ops():
+    print("\n9. Genome operators (20,000 seeded mutations + crossovers)")
+    rng = np.random.default_rng(config.SEED)
+    lib = FEATURE_LIB
+
+    pool = [gn.random_genome(rng, lib) for _ in range(64)]
+    illegal, broken_roundtrip, clones = [], [], 0
+    families = {}
+    n_mut = n_cross = 0
+    g = pool[0]
+    for i in range(10_000):
+        parent = g
+        g = gn.mutate(g, rng, lib)
+        n_mut += 1
+        clones += int(g.hash() == parent.hash())
+        mate = pool[int(rng.integers(len(pool)))]
+        child = gn.crossover(g, mate, rng)
+        n_cross += 1
+        for who in (g, child):
+            v = _violations(who, lib)
+            if v and len(illegal) < 5:
+                illegal.append("%s: %s" % (who.hash(), ", ".join(v)))
+            if gn.from_dict(who.to_dict()).hash() != who.hash() and len(broken_roundtrip) < 5:
+                broken_roundtrip.append(who.hash())
+            families[who.signal.family] = families.get(who.signal.family, 0) + 1
+        g = child if i % 3 == 0 else g              # let crossover children breed too
+
+    check("%d mutations + %d crossovers all inside BOUNDS" % (n_mut, n_cross),
+          not illegal, "; ".join(illegal) if illegal else
+          "%d genomes checked across %d families" % (2 * n_mut, len(families)))
+    check("encode -> decode -> hash is identity", not broken_roundtrip,
+          "; ".join(broken_roundtrip) if broken_roundtrip else "on every genome")
+    check("every family reachable by mutation", len(families) == len(gn.BOUNDS["families"]),
+          " ".join("%s=%d" % kv for kv in sorted(families.items())))
+    check("mutation rarely returns the parent unchanged", clones / n_mut < 0.05,
+          "%d clones in %d mutations (%.2f%%)" % (clones, n_mut, 100 * clones / n_mut))
+
+    # Fixed inputs -> fixed stream, in this process and in any other. The golden
+    # value pins the derivation itself: change how child seeds are built and every
+    # lineage in the ledger silently becomes irreproducible.
+    a1 = gn.child_rng(config.SEED, 7, "abcdef123456", 3).random()
+    a2 = gn.child_rng(config.SEED, 7, "abcdef123456", 3).random()
+    b1 = gn.child_rng(config.SEED, 7, "abcdef123456", 4).random()
+    c1 = gn.child_rng(config.SEED, 8, "abcdef123456", 3).random()
+    check("child_rng reproducible from (SEED, generation, parent, idx)",
+          a1 == a2 and a1 != b1 and a1 != c1,
+          "idx 3 -> %.9f twice; idx 4 -> %.9f; gen 8 -> %.9f" % (a1, b1, c1))
+    check("stable_hash is process-independent (golden value)",
+          gn.stable_hash(config.SEED, 7, "abcdef123456", 3) == 2198565245971884535,
+          "%d" % gn.stable_hash(config.SEED, 7, "abcdef123456", 3))
+
+    # The operators must not need a legal genome to hand back a legal one.
+    wrecked = gn.Genome(
+        signal=gn.SignalGene(family="hgb", horizon=99, refit_days=7,
+                             features=("feat_00", "feat_00", "nope"),
+                             params=(("max_depth", 12),)),
+        portfolio=gn.PortfolioGene(n_long=0, n_short=1, weighting="nope", gross=9.0,
+                                   vol_target=0.99, rebalance_days=3),
+        risk=gn.RiskGene(stop_loss=0.99, trail_stop=0.99, regime_filter="nope",
+                         regime_scale=9.0, dd_limit=0.99))
+    fixed = gn._repair(wrecked, lib)                # noqa: SLF001 — the repair IS the test
+    check("repair drags an out-of-spec genome back inside BOUNDS",
+          not _violations(fixed, lib), "; ".join(_violations(fixed, lib)) or fixed.describe())
+
+
 # ── 10. no wall-clock in compute paths ─────────────────────────────────────────
 def test_no_wallclock():
     print("\n10. No wall-clock outside run_*.py I/O boundaries")
@@ -394,6 +520,7 @@ def main() -> int:
     test_accounting()
     test_fill_timing()
     test_cost_linearity()
+    test_genome_ops()
     test_no_wallclock()
     print("\nVERIFY:", "ALL PASS" if ok else "FAILURES PRESENT")
     return 0 if ok else 1
