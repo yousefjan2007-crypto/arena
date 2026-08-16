@@ -167,7 +167,7 @@ def f1_sharpes(state_dir=None) -> np.ndarray:
     return vals[np.isfinite(vals)]
 
 
-def trial_sr_std(state_dir=None) -> float:
+def trial_sr_std(state_dir=None, daily: bool = False) -> float:
     """Empirical spread of the trial Sharpes — futures_bot's approach, never a
     hardcoded constant.
 
@@ -175,13 +175,24 @@ def trial_sr_std(state_dir=None) -> float:
     it falls back to 1/sqrt(n_trials): the standard error of a Sharpe estimated
     from a single trial's worth of evidence, which shrinks as the search grows and
     so keeps the correction conservative early on rather than confidently wrong.
+
+    UNITS — THE TRAP THAT WOULD SILENTLY BREAK GATE G2. This ledger stores
+    ANNUALISED Sharpes, because that is what evaluate.sharpe returns and what a
+    human reads. deflated_sharpe() works in DAILY Sharpe units: it computes
+    mean/std of a daily return series and compares it to a threshold built from
+    var(all_sharpes). Feed it annualised dispersion and sigma comes out sqrt(252)
+    = 15.9x too wide, sr0 becomes unreachable, and G2 rejects every candidate
+    forever while looking like it is working. `daily=True` returns the same
+    dispersion in deflated_sharpe's units; Phase 5 must use it (or pass
+    f1_sharpes() / sqrt(TRADING_DAYS_YEAR) as all_sharpes).
     """
     s = f1_sharpes(state_dir)
+    scale = np.sqrt(config.TRADING_DAYS_YEAR) if daily else 1.0
     if len(s) >= config.TRIAL_SR_STD_MIN_ROWS:
         sd = float(np.std(s, ddof=1))
         if np.isfinite(sd) and sd > 0.0:
-            return sd
-    return 1.0 / np.sqrt(max(n_trials(state_dir), 1))
+            return sd / scale
+    return 1.0 / np.sqrt(max(n_trials(state_dir), 1)) / scale
 
 
 # ── vault access (Phase 5 calls this; it is counted, not free) ─────────────────

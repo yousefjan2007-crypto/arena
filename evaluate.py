@@ -47,6 +47,7 @@ scores `daily_net`.
 from __future__ import annotations
 
 import itertools
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -216,7 +217,6 @@ def _screen_genome(genome):
     real genome's hash on the F0 row, because the real genome is what was screened
     and what the selection acted on.
     """
-    from dataclasses import replace
     p = genome.portfolio
     return replace(
         genome,
