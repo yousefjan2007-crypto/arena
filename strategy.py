@@ -61,10 +61,31 @@ import features as arena_features
 from env import CostModel, MarketEnv
 from genome import BOUNDS
 
-RULE_FAMILIES = tuple(f for f in BOUNDS["families"] if f not in BOUNDS["model_families"])
-
 
 # ── trailing statistics (backward windows only) ────────────────────────────────
+def _cached_roll(market, kind: str, window: int) -> np.ndarray:
+    """A trailing statistic of `market.close`, computed once per market.
+
+    Every genome on a market gets the same realised-vol and moving-average
+    matrices — they depend on the bars and the window, never on the genome — so
+    Phase 3's F0 screen would otherwise rebuild them once per agent (64 genomes x
+    3 eras). The memo hangs off the MarketData instance rather than a module
+    global so it dies with the market it describes; it is safe because a
+    MarketData's price arrays are read-only from construction.
+    """
+    memo = getattr(market, "_roll_memo", None)
+    if memo is None:
+        memo = {}
+        market._roll_memo = memo
+    key = (kind, window)
+    if key not in memo:
+        fn = _rolling_std if kind == "vol" else _rolling_mean
+        arr = fn(market.close, window)
+        arr.setflags(write=False)
+        memo[key] = arr
+    return memo[key]
+
+
 def _rolling_std(mat: np.ndarray, window: int) -> np.ndarray:
     """Trailing std of daily log returns, annualised. Row t uses rows <= t."""
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -119,9 +140,10 @@ class StrategyAgent:
         self.is_model = genome.is_model
         self.params = sig.pdict
 
-        # Trailing stats every family may need. Computed once per agent, not per bar.
-        self._vol = _rolling_std(self.close, cfg.REALIZED_VOL_DAYS)
-        self._ma = _rolling_mean(self.close, cfg.TREND_MA_DAYS)
+        # Trailing stats every family may need: never per bar, and — since they
+        # depend only on the bars — never per genome either. See _cached_roll.
+        self._vol = _cached_roll(market, "vol", cfg.REALIZED_VOL_DAYS)
+        self._ma = _cached_roll(market, "ma", cfg.TREND_MA_DAYS)
 
         self._seasonal = None
         if sig.family == "seasonal_rule":
@@ -358,19 +380,22 @@ class StrategyAgent:
         return hit
 
     def _overlay_scale(self, t: int, drawdown: float):
-        """(gross multiplier, reason). Reason names the overlay that set it."""
-        r = self.genome.risk
-        scale, why = 1.0, None
+        """(gross multiplier, names of the overlays holding it down, "+"-joined).
 
-        off = False
-        if r.regime_filter == "spy_200dma":
-            spy, ma = self.close[t, self._spy], self._ma[t, self._spy]
-            off = bool(np.isfinite(spy) and np.isfinite(ma) and spy < ma)
-        elif r.regime_filter == "vix_pct_80":
-            v = self._vix_pct[t]
-            off = bool(np.isfinite(v) and v > self.cfg.VIX_PCT_LIMIT)
-        if off:
-            scale, why = r.regime_scale, "regime"
+        A MISSING regime reading is treated as "regime fine" — the safe direction,
+        but not a free one, and callers must know it. macro.py fetches ^VIX from
+        2000 and vix_pct is a 252-bar trailing rank, so `vix_pct_80` reads NaN for
+        every bar before ~2001: on DESIGN's 1997-2001 F0 era that gene is
+        structurally inert and scores exactly like `regime_filter=None`. The same
+        holds, more briefly, for spy_200dma over its first 200 bars. run_episode
+        reports `regime_finite_frac` so evaluation can see it rather than
+        mis-attribute a dead gene as a neutral one.
+        """
+        r = self.genome.risk
+        scale, active = 1.0, []
+
+        if self._regime_off(t):
+            scale, active = r.regime_scale, ["regime"]
 
         if r.dd_limit is not None:
             dd = -min(drawdown, 0.0)
@@ -380,8 +405,32 @@ class StrategyAgent:
                 self._derisked = True
             if self._derisked:
                 scale *= self.cfg.DD_DERISK_SCALE
-                why = "derisk"
-        return scale, why
+                active.append("derisk")
+        return scale, ("+".join(active) if active else None)
+
+    def _regime_off(self, t: int) -> bool:
+        r = self.genome.risk
+        if r.regime_filter == "spy_200dma":
+            spy, ma = self.close[t, self._spy], self._ma[t, self._spy]
+            return bool(np.isfinite(spy) and np.isfinite(ma) and spy < ma)
+        if r.regime_filter == "vix_pct_80":
+            v = self._vix_pct[t]
+            return bool(np.isfinite(v) and v > self.cfg.VIX_PCT_LIMIT)
+        return False
+
+    def _regime_finite_frac(self, i0: int, n_steps: int):
+        """Fraction of the episode's decision bars on which the genome's regime
+        input was actually readable. None when the genome has no regime filter.
+        Reported, not acted on — see _overlay_scale."""
+        r = self.genome.risk
+        if r.regime_filter is None or n_steps <= 0:
+            return None
+        sl = slice(i0, i0 + n_steps)
+        if r.regime_filter == "spy_200dma":
+            ok = np.isfinite(self.close[sl, self._spy]) & np.isfinite(self._ma[sl, self._spy])
+        else:
+            ok = np.isfinite(self._vix_pct[sl])
+        return float(np.mean(ok))
 
     # ── position bookkeeping (entry price / extreme close per spell) ───────────
     def _track_spells(self, t_next: int, before: np.ndarray, after: np.ndarray, fills) -> None:
@@ -413,7 +462,17 @@ class StrategyAgent:
         Returns dates / daily_net / daily_gross / turnover / costs, each of length
         (bars - 1): one entry per env step, dated by the bar the return was marked
         on. daily_gross is the same path with the day's frictions added back, so
-        gross − net is exactly the cost drag.
+        gross − net is exactly the cost drag. Plus `regime_finite_frac`: how much
+        of the episode the genome's regime input was readable at all (None when it
+        has no regime filter) — see _overlay_scale for why that is not decoration.
+
+        DECISION-LOG TAGGING IS TRANSITION-ONLY, and Phase 5 must not read it as a
+        per-trade overlay flag. A bar is tagged with the overlays that MOVED on it
+        ("regime", "derisk", "stop", or a "+"-join like "stop+regime"); trades
+        executed on later bars while the book is still held down carry the plain
+        "rebalance" tag, because nothing about the overlay changed to cause them.
+        To know whether a given trade happened under an overlay, replay the tags
+        forward from the last transition — one flag per fill is not what is stored.
         """
         env = MarketEnv(self.market, self.cost, start=env_start, end=env_end,
                         rng=np.random.default_rng(self.cfg.SEED), decision_log=decision_log)
@@ -439,10 +498,6 @@ class StrategyAgent:
                 if self._fit(t, fit_audit):
                     last_fit = step
 
-            # "rebalance" is also the right tag between rebalances: the agent
-            # restates its standing target, so any fill there is drift correction
-            # toward it, not a new decision.
-            reason = "rebalance"
             if step % rebalance_days == 0:
                 tradable = np.isfinite(self.close[t]) & (self.close[t] > 0.0)
                 self._target_w = self._targets(t, self._scores(t, tradable), tradable)
@@ -450,11 +505,19 @@ class StrategyAgent:
             hit = self._stopped(t, env.shares)
             if hit.any():
                 self._target_w = np.where(hit, 0.0, self._target_w)
-                reason = "stop"
 
             scale, why = self._overlay_scale(t, obs["drawdown"])
-            if why is not None and scale != last_scale and reason != "stop":
-                reason = why
+            # Every cause acting on THIS bar, "+"-joined ("stop+regime"). A stop
+            # must not swallow a coincident overlay transition: the tag is the
+            # only record that the overlay moved, and suppressing it here would
+            # erase that transition from the log permanently — the later bars see
+            # no change to report. "rebalance" is also the right tag between
+            # rebalances, where the agent restates its standing target and any
+            # fill is drift correction toward it rather than a new decision.
+            causes = (["stop"] if hit.any() else [])
+            if why is not None and scale != last_scale:
+                causes.append(why)
+            reason = "+".join(causes) if causes else "rebalance"
             last_scale = scale
 
             before = env.shares.copy()
@@ -478,7 +541,8 @@ class StrategyAgent:
                 "daily_net": np.asarray(net, dtype=np.float64),
                 "daily_gross": np.asarray(gross, dtype=np.float64),
                 "turnover": np.asarray(turn, dtype=np.float64),
-                "costs": np.asarray(cost_path, dtype=np.float64)}
+                "costs": np.asarray(cost_path, dtype=np.float64),
+                "regime_finite_frac": self._regime_finite_frac(env.i0, step)}
 
 
 def sharpe(returns: np.ndarray) -> float:
@@ -549,6 +613,10 @@ if __name__ == "__main__":
               % (family, g.hash(), sharpe(res["daily_net"][pre]),
                  sharpe(res["daily_gross"][pre]), 100 * (eq[-1] - 1.0), 100 * dd,
                  float(res["turnover"][pre].mean()), secs, g.describe()[:58]))
+        rff = res["regime_finite_frac"]
+        if rff is not None:
+            print("  %-13s   regime input %-11s readable on %.0f%% of episode bars"
+                  % ("", g.risk.regime_filter, 100 * rff))
         if audit:
             worst = max(audit, key=lambda a: a["max_t1_used"])
             print("  %-13s   %d refits, purge holds: last label used %s closed %d bars "
