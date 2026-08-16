@@ -68,6 +68,20 @@ def synthetic_market(n_days: int = 520, n_syms: int = 8, seed: int = None):
     return datafeed.MarketData(dates, symbols, open_, close, volume)
 
 
+def flat_market(n_days: int = 60, n_syms: int = 10, price: float = 5.0):
+    """Constant prices, no gaps: the only thing that can move leverage is the
+    account itself (whole-share rounding, costs), which is exactly what the
+    boundary-churn check needs to isolate. The default price divides START_CASH
+    evenly across n_syms, so an equal-weight book leaves NO rounding residue and
+    the frictions alone push cash negative — the condition that puts a book that
+    targets exactly the net cap a hair over it."""
+    dates = pd.bdate_range("2000-01-03", periods=n_days)
+    px = np.full((n_days, n_syms), price)
+    volume = np.full((n_days, n_syms), 1e6)
+    return datafeed.MarketData(dates, ["FLT%d" % i for i in range(n_syms)],
+                               px.copy(), px.copy(), volume)
+
+
 def replay_equity(log, market, upto_t: int):
     """Rebuild (cash, shares) from the decision log alone — the only evidence a
     real audit would have. Carry rows charge financing; fill rows move shares."""
@@ -121,11 +135,12 @@ def test_accounting():
 
         # limits on the post-fill book, at the reference the orders were sized on
         val = np.where(env.shares != 0.0, env.shares * market.close[t0], 0.0)
+        band = 1.0 + config.LEV_EPS          # gross/net keep a hysteresis band
         if np.max(np.abs(val), initial=0.0) > config.MAX_NAME_WEIGHT * eq0 + config.ACCOUNT_TOL:
             limit_breaches.append(("name", t0))
-        if np.abs(val).sum() > config.MAX_GROSS_LEV * eq0 + config.ACCOUNT_TOL:
+        if np.abs(val).sum() > config.MAX_GROSS_LEV * band * eq0 + config.ACCOUNT_TOL:
             limit_breaches.append(("gross", t0))
-        if abs(val.sum()) > config.MAX_NET_LEV * eq0 + config.ACCOUNT_TOL:
+        if abs(val.sum()) > config.MAX_NET_LEV * band * eq0 + config.ACCOUNT_TOL:
             limit_breaches.append(("net", t0))
         if np.count_nonzero(env.shares) > config.MAX_POSITIONS:
             limit_breaches.append(("positions", t0))
@@ -157,6 +172,31 @@ def test_accounting():
           "shorts %d, lev-scaled %d, dust-rejected %d, name-capped %d, count-capped %d"
           % (saw["short"], saw["scaled"], saw["below_min_usd"], saw["name_cap"],
              saw["position_cap"]))
+
+    # Boundary churn: a book sitting exactly ON the net cap must not be dragged
+    # around by rounding. Go fully invested at 1.0 on a flat market, then hold it
+    # (restating the book's own weights, the way a between-rebalance strategy
+    # does). Costs put cash slightly negative, so net sits a hair above 1.0 for
+    # the rest of the run — inside LEV_EPS, so nothing should scale or repair.
+    flat = flat_market()
+    fenv = MarketEnv(flat, CostModel())
+    fobs = fenv.reset()
+    nf = len(flat.symbols)
+    scaled = repairs = 0
+    for k in range(40):
+        px = flat.close[fobs["t"]]
+        w = (np.full(nf, 1.0 / nf) if k == 0
+             else fenv.shares * px / fobs["equity"])          # hold what we hold
+        fobs, _, fdone, finfo = fenv.step(w)
+        scaled += int(finfo["leverage_scaled"] < 1.0)
+        repairs += sum(1 for r in finfo["fills"] if r["reason"] == "risk_cap")
+        if fdone:
+            break
+    net = float(np.sum(fenv.shares * flat.close[fenv.t])) / fenv.equity
+    check("a 1.0-gross book on a flat market never self-deleverages",
+          scaled == 0 and repairs == 0 and net > config.MAX_NET_LEV,
+          "net settled at %.5f (cash $%.2f), %d scale events, %d risk_cap trades"
+          % (net, fenv.cash, scaled, repairs))
 
     # The 8-symbol market cannot reach MAX_POSITIONS, so the count cap gets its
     # own short run on a wider one.
@@ -202,8 +242,7 @@ def test_fill_timing():
     check("exactly one fill", len(info["fills"]) == 1)
     row = info["fills"][0]
     px_open = float(market.open[t0 + 1, 1])
-    expected = px_open + (max(px_open * config.HALF_SPREAD_BPS / 1e4, config.HALF_SPREAD_FLOOR)
-                          + px_open * config.SLIPPAGE_BPS / 1e4)
+    expected = px_open * (1.0 + (config.HALF_SPREAD_BPS + config.SLIPPAGE_BPS) / 1e4)
     check("fill dated t+1, not t", row["date"] == market.dates[t0 + 1],
           "%s (decided %s)" % (row["date"].date(), market.dates[t0].date()))
     check("buy fills at open + half-spread + slippage", abs(row["fill_px"] - expected) < 1e-12,
@@ -213,10 +252,11 @@ def test_fill_timing():
           row["shares"] == np.trunc(config.MAX_NAME_WEIGHT * config.START_CASH
                                     / market.close[t0, 1] + config.SHARE_ROUND_EPS),
           "%.0f shares" % row["shares"])
-    check("commission = max(min, per-share x shares)",
+    check("commission = max(min, bps x notional)",
           abs(row["commission"] - max(config.COMMISSION_MIN,
-                                      config.COMMISSION_PER_SHARE * row["shares"])) < 1e-12,
-          "$%.4f" % row["commission"])
+                                      row["shares"] * px_open * config.COMMISSION_BPS / 1e4)
+              ) < 1e-12,
+          "$%.4f on $%.0f notional" % (row["commission"], row["shares"] * px_open))
 
     # SELL: close the same position at the next decision.
     t1 = obs["t"]
@@ -224,8 +264,7 @@ def test_fill_timing():
     check("exactly one closing fill", len(info["fills"]) == 1)
     srow = info["fills"][0]
     px_open = float(market.open[t1 + 1, 1])
-    expected = px_open - (max(px_open * config.HALF_SPREAD_BPS / 1e4, config.HALF_SPREAD_FLOOR)
-                          + px_open * config.SLIPPAGE_BPS / 1e4)
+    expected = px_open * (1.0 - (config.HALF_SPREAD_BPS + config.SLIPPAGE_BPS) / 1e4)
     check("sell fills at open - half-spread - slippage", abs(srow["fill_px"] - expected) < 1e-12,
           "%.10f vs %.10f (open %.10f)" % (srow["fill_px"], expected, px_open))
     check("sell fill is below the open", srow["fill_px"] < px_open)

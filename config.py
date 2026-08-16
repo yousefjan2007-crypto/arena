@@ -130,12 +130,19 @@ MAX_NAME_WEIGHT = 0.20
 MIN_POSITION_USD = 500.0            # orders smaller than this are dropped (exits exempt)
 WHOLE_SHARES = True
 NO_INTRADAY_EXITS = True            # PDT-safe: decide at close t, fill at open t+1
+# Hysteresis band on the leverage caps: the risk repair only fires past
+# cap*(1+LEV_EPS), so a strategy targeting exactly the cap does not churn a share
+# back and forth every day on rounding and cost drift. Repairs still trim all the
+# way back to the strict cap.
+LEV_EPS = 0.01
 
 # ── frictions (charged on every simulated fill) ────────────────────────────────
-COMMISSION_PER_SHARE = 0.005
-COMMISSION_MIN = 1.00
+# All proportional (bps of notional). Nothing is quoted per share: the cache
+# stores split-adjusted prices, so a $/share figure means something different in
+# 1995 than today, while a bps figure is scale-invariant.
+COMMISSION_BPS = 0.5
+COMMISSION_MIN = 1.00               # dominates below a ~$20k order — small-account reality
 HALF_SPREAD_BPS = 2.5
-HALF_SPREAD_FLOOR = 0.005           # $/share floor; dominates the bps term on cheap stocks
 SLIPPAGE_BPS = 2.0
 BORROW_ANNUAL = 0.01                # on short market value
 MARGIN_ANNUAL = 0.065               # on negative cash

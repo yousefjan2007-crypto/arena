@@ -25,7 +25,10 @@ overnight can carry a name past its cap afterwards; that is drift, not a breach,
 and the env does not chase it intraday. It does, on the next decision, place
 whatever reducing trades the caps require even when they are smaller than
 MIN_POSITION_USD (reason "risk_cap"): risk limits outrank the dust filter, or a
-drifted position could sit outside its cap indefinitely.
+drifted position could sit outside its cap indefinitely. The gross/net caps carry
+a config.LEV_EPS hysteresis band so a strategy that targets exactly the cap is
+not forced to sell a share a day chasing rounding; a repair, once triggered,
+trims all the way back to the strict cap.
 
 DECISION LOG (Phase 3 passes the real logger; None disables it). Any object with
 `.append(row_dict)` works. One row per fill, per forced action, and per financing
@@ -56,12 +59,14 @@ SIMULATOR LIMITATIONS (stated because they bias results):
     at t+1 the position is force-closed at the last available close, cost-free,
     logged with reason "data_end". Real delistings gap and cost money, so short
     books look slightly better here than they would live.
-  • Per-share frictions (commission_per_share, half_spread_floor) are charged on
-    SPLIT-ADJUSTED prices, because that is what the shared cache stores. A 1995
-    AAPL bar reads $0.28 rather than ~$40, so the $/share floor is ~176bp there
-    instead of 2.5bp: pre-2005 costs are materially overstated for names that
-    split a lot. The milestone below prints the cost share of gross P&L so the
-    distortion is always visible.
+  • Every friction is PROPORTIONAL (bps of notional, subject to the $1 order
+    minimum), so the cost model is scale-invariant under split adjustment: the
+    cache stores adjusted prices, and a 1995 AAPL bar reading $0.28 rather than
+    ~$40 costs the same fraction either way. A $/share figure would not — it
+    would have charged ~176bp there instead of 2.5bp. The flip side is that real
+    1990s spreads were far wider than today's few bps, so early-era costs are
+    understated; the 2x cost-stress gate (G7) is the standing defense, and the
+    milestone below prints the cost share of gross P&L to keep it visible.
   • `rng` is stored and unused. It reserves the seed stream for a future
     stochastic fill model (partial fills, queue position); today every fill is
     deterministic given the bars, so results are reproducible without it.
@@ -80,26 +85,27 @@ class CostModel:
     """Per-fill and per-day frictions. `stress_mult` scales EVERY component
     linearly (0 = frictionless reference, 2 = the G7 double-cost stress)."""
 
-    commission_per_share: float = config.COMMISSION_PER_SHARE
+    commission_bps: float = config.COMMISSION_BPS
     commission_min: float = config.COMMISSION_MIN
     half_spread_bps: float = config.HALF_SPREAD_BPS
-    half_spread_floor: float = config.HALF_SPREAD_FLOOR
     slippage_bps: float = config.SLIPPAGE_BPS
     borrow_annual: float = config.BORROW_ANNUAL
     margin_annual: float = config.MARGIN_ANNUAL
     stress_mult: float = 1.0
 
     def spread_per_share(self, px: float) -> float:
-        """Half-spread in $/share: the bps term, floored in cents (the floor is
-        what a small account actually pays on a cheap stock)."""
-        return max(px * self.half_spread_bps / 1e4, self.half_spread_floor) * self.stress_mult
+        return px * self.half_spread_bps / 1e4 * self.stress_mult
 
     def slippage_per_share(self, px: float) -> float:
         return px * self.slippage_bps / 1e4 * self.stress_mult
 
-    def commission(self, shares: float) -> float:
+    def commission(self, notional: float) -> float:
+        """Charged on the order's market value at the bar price, NOT at the fill
+        price: the fill already carries the stress multiplier, and folding it in
+        twice would make commission non-linear in stress (which the G7 cost-stress
+        gate reads directly). The difference is a few bps of a half-bps charge."""
         return max(self.commission_min,
-                   self.commission_per_share * abs(shares)) * self.stress_mult
+                   abs(notional) * self.commission_bps / 1e4) * self.stress_mult
 
     def daily_borrow(self, short_mv: float) -> float:
         return short_mv * self.borrow_annual / config.TRADING_DAYS_YEAR * self.stress_mult
@@ -188,11 +194,14 @@ class MarketEnv:
                 rejected.append((self.market.symbols[j], "position_cap"))
             w = np.where(np.isin(np.arange(len(w)), keep), w, 0.0)
 
+        # Scale only past the hysteresis band, but scale all the way back to the
+        # strict cap. Without the band, a target of exactly MAX_NET_LEV would trip
+        # a scale event on nothing but the float error of summing the weights.
         scale = 1.0
         gross, net = float(np.abs(w).sum()), float(w.sum())
-        if gross > config.MAX_GROSS_LEV:
+        if gross > config.MAX_GROSS_LEV * (1.0 + config.LEV_EPS):
             scale = min(scale, config.MAX_GROSS_LEV / gross)
-        if abs(net) * scale > config.MAX_NET_LEV:
+        if abs(net) * scale > config.MAX_NET_LEV * (1.0 + config.LEV_EPS):
             scale = min(scale, config.MAX_NET_LEV / abs(net))
         return w * scale, scale
 
@@ -250,7 +259,16 @@ class MarketEnv:
         if over.any():
             allowed = np.trunc(cap_usd / np.where(px > 0.0, px, np.inf))
             want = np.where(over, np.sign(want) * allowed, want)
-        return self._trim_to_leverage(want, close_t, equity_t)
+        # Leverage repair fires only outside the hysteresis band, then trims all
+        # the way to the strict cap. A book targeting exactly the cap ends each
+        # day a hair over it (whole-share rounding, costs, overnight gaps); without
+        # the band it would sell a share every single day chasing that hair.
+        val = want * px
+        band = 1.0 + config.LEV_EPS
+        if (float(np.abs(val).sum()) > config.MAX_GROSS_LEV * band * equity_t
+                or abs(float(val.sum())) > config.MAX_NET_LEV * band * equity_t):
+            want = self._trim_to_leverage(want, close_t, equity_t)
+        return want
 
     def _execute(self, tgt, ctx, reason: str, dust_filter: bool = True):
         """Trade the book toward `tgt` at the next open. `ctx` carries the row of
@@ -272,7 +290,7 @@ class MarketEnv:
             spread_ps = self.cost.spread_per_share(px_open)
             slip_ps = self.cost.slippage_per_share(px_open)
             fill_px = px_open + (1.0 if delta > 0 else -1.0) * (spread_ps + slip_ps)
-            commission = self.cost.commission(delta)
+            commission = self.cost.commission(delta * px_open)
             self.cash -= delta * fill_px + commission
             self.shares[j] = want
 
@@ -404,9 +422,12 @@ class MarketEnv:
         assert n_open <= config.MAX_POSITIONS, "%d open positions" % n_open
         assert np.max(np.abs(val), initial=0.0) <= config.MAX_NAME_WEIGHT * equity_t + tol, \
             "name weight %.4f over cap" % (np.max(np.abs(val), initial=0.0) / equity_t)
-        assert np.abs(val).sum() <= config.MAX_GROSS_LEV * equity_t + tol, \
+        # gross/net carry the LEV_EPS band: inside it the env deliberately leaves
+        # the book alone rather than churning a share a day (see _repair_book).
+        band = 1.0 + config.LEV_EPS
+        assert np.abs(val).sum() <= config.MAX_GROSS_LEV * band * equity_t + tol, \
             "gross leverage %.4f over cap" % (np.abs(val).sum() / equity_t)
-        assert abs(val.sum()) <= config.MAX_NET_LEV * equity_t + tol, \
+        assert abs(val.sum()) <= config.MAX_NET_LEV * band * equity_t + tol, \
             "net leverage %.4f over cap" % (val.sum() / equity_t)
 
 
