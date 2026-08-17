@@ -278,8 +278,17 @@ GATE_ROLLING_WIN_FRAC = 0.60        # G9  and win this share of rolling windows
 GATE_ROLLING_WINDOW_YEARS = 3
 GATE_RUIN_DD = 0.40                 # G10 drawdown defining ruin
 GATE_RUIN_MAX_PROB = 0.05           # G10 P(ruin within RUIN_MC_YEARS) must be below this
-RUIN_MC_PATHS = 200
+RUIN_MC_PATHS = 200                 # per engine (GARCH-t and block bootstrap)
 RUIN_MC_YEARS = 2
+
+# ── weekly deep evaluation (run_deepeval.py) ───────────────────────────────────
+# How many hall-of-fame leaders get the F2 battery each week. It is small because
+# F2 is expensive (CPCV alone is 2 x C(8,2) = 56 episodes with real refits per
+# candidate) and because every candidate shown the vault deflates the vault DSR of
+# every candidate after it — the honesty tax is paid in the gate, so the number of
+# looks belongs in the config digest rather than on a command line.
+DEEPEVAL_CANDIDATES = 2
+DEEPEVAL_TIME_BUDGET_MIN = 360      # the Actions deepeval.yml window (6 h)
 
 # ── execution ──────────────────────────────────────────────────────────────────
 # "sandbox" -> "paper" -> "live". Going live is a human-only flip; nothing in this
@@ -317,7 +326,7 @@ EXECUTION_MODE = "sandbox"
 # cannot see a CODE change — that is git's job, not this hash's.
 _CONFIG_HASH_SKIP = frozenset({
     "STATE_DIR", "ARTIFACT_DIR", "OUTPUT_DIR", "DATA_DIR",   # where files live
-    "N_JOBS", "GEN_TIME_BUDGET_MIN",                # how fast, not what
+    "N_JOBS", "GEN_TIME_BUDGET_MIN", "DEEPEVAL_TIME_BUDGET_MIN",   # how fast, not what
     "ENV_CHECK_INVARIANTS",                         # asserts, never arithmetic
 })
 # Inherited, never redeclared here, but the simulation reads them. (SEED is also
