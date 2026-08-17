@@ -6,3 +6,12 @@ config.local.json
 # Derived, rebuildable, and large (~1MB per symbol of full history): the feature
 # panel is a cache of sell_in_may's price cache, keyed by data_hash — never state.
 state/panel_cache/
+# NOTE state/tmp_gen_*/ is deliberately NOT ignored: an Actions runner is destroyed
+# after every session, so committing the in-flight F1 checkpoints is the only way a
+# generation that outlives its time budget can resume instead of re-simulating.
+# They are removed by the run that finishes the generation.
+#
+# sell_in_may/config.py makes these two on import, wherever it lives. Vendored, it
+# lives here — and the cache arena actually reads is data/cache/, not this.
+vendor/sell_in_may/cache/
+vendor/sell_in_may/output/

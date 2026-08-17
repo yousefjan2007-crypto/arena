@@ -182,6 +182,25 @@ def panel_hash(data_hash: str, names, grid) -> str:
     return h.hexdigest()[:16]
 
 
+def recompute_panel_hash(market, asof=None) -> tuple:
+    """(names, grid, panel_hash) built from source, BYPASSING the joblib memo.
+
+    Two callers, one reason. The byte-stability smoke needs a panel that was
+    actually computed rather than loaded, or it would be comparing the cache to
+    itself. So does the live-vs-vendored parity check — and there the memo is
+    actively misleading: the cache key is (data_hash, asof) and lives under
+    state/, which does NOT move with the sibling mode, so a vendored run would
+    load the panel the LIVE run built and report a match having executed none of
+    the vendored code.
+    """
+    asof = pd.Timestamp(asof) if asof is not None else market.dates[-1]
+    with _cache_only():
+        panel = _sl_features.build_panel(_history(market.symbols), _meta(market.symbols),
+                                         asof=asof)
+    names, grid = _to_grid(panel, market)
+    return names, grid, panel_hash(market.data_hash, names, grid)
+
+
 def _cache_file(data_hash: str, asof: pd.Timestamp) -> str:
     return os.path.join(PANEL_CACHE_DIR, "panel_%s_%s.joblib" % (data_hash, asof.strftime("%Y%m%d")))
 
@@ -241,8 +260,19 @@ def build_features(market, asof=None) -> None:
 
 
 if __name__ == "__main__":
+    import subprocess
+    import sys
+
     syms = datafeed.in_cache(_sl_universe.build_universe()[0])[:20]
     md = datafeed.load_market(syms, start=config.DATA_START)
+
+    # The child leg of the vendor-parity check below: build the panel from source
+    # and report its identity in one line, nothing else.
+    if "--panel-hash" in sys.argv:                                  # io-boundary
+        _names, _grid, _ph = recompute_panel_hash(md)
+        print("PANELHASH %s %s %d %d" % (md.data_hash, _ph, len(md.symbols), len(_names)))
+        raise SystemExit(0)
+
     build_features(md)
 
     n_dates, n_syms = md.shape
@@ -267,12 +297,29 @@ if __name__ == "__main__":
 
     # Byte-stability: a fresh recompute must equal what came back from the cache,
     # or two runs of the same generation would score the same genome differently.
-    with _cache_only():
-        panel = _sl_features.build_panel(_history(md.symbols), _meta(md.symbols),
-                                         asof=md.dates[-1])
-    names, grid = _to_grid(panel, md)
+    names, grid, fresh_hash = recompute_panel_hash(md)
     same = (names == md.feature_names
             and all(grid[k].tobytes() == md.features[k].tobytes() for k in names)
-            and panel_hash(md.data_hash, names, grid) == md.panel_hash)
+            and fresh_hash == md.panel_hash)
     print("  byte-stable : %s (recomputed panel vs cached load, incl. panel_hash)"
           % ("PASS" if same else "FAIL"))
+
+    # Vendor parity — the claim the whole vendor/ directory rests on: the runner,
+    # reading arena's committed cache through the vendored copies of the sibling
+    # modules, builds THE SAME PANEL this Mac builds from the live checkouts. Not
+    # a stylistic equivalence: panel_hash is the like-for-like identity gate G1
+    # compares, so if these two ever disagree, Mac results and cloud results stop
+    # being comparable and the ledger's identity columns start lying.
+    if not config.VENDORED and os.path.isdir(config.VENDOR_DIR):
+        env = dict(os.environ, ARENA_FORCE_VENDOR="1")              # io-boundary
+        out = subprocess.run([sys.executable, os.path.abspath(__file__), "--panel-hash"],
+                             capture_output=True, text=True, env=env, cwd=config.ROOT)
+        line = next((l for l in out.stdout.splitlines() if l.startswith("PANELHASH")), "")
+        parts = line.split()
+        agree = len(parts) == 5 and parts[1] == md.data_hash and parts[2] == fresh_hash
+        print("  vendor parity: %s  live %s / vendored %s over %s symbols x %s features "
+              "(both recomputed from source, memo bypassed)"
+              % ("PASS" if agree else "FAIL", fresh_hash, parts[2] if len(parts) == 5 else "?",
+                 parts[3] if len(parts) == 5 else "?", parts[4] if len(parts) == 5 else "?"))
+        if not agree and out.stderr:
+            print("  vendored leg stderr: %s" % out.stderr.strip().splitlines()[-1][:200])

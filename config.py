@@ -17,6 +17,15 @@ TWO RULES THIS FILE EXISTS TO ENFORCE:
      that project's paths — the documented trap — so arena's ROOT is RESTORED
      immediately after, before any arena path is derived from it.
 
+TWO HOMES, ONE ANSWER. arena runs on this Mac (siblings on disk) and on a public
+GitHub runner (no siblings at all), so rule 1 has to resolve twice. `VENDORED`
+picks: live sibling checkouts when ~/sell_in_may and ~/signal_lab exist, the
+byte-identical copies under vendor/ otherwise. The data the siblings read moves
+with them — CACHE_DIR and DATA_DIR point at the live sibling caches on the Mac
+and at arena's own committed data/ on the runner. `ARENA_FORCE_VENDOR=1` forces
+the vendored path on a machine that has both, which is the only way to prove the
+two agree (features.py's smoke asserts panel_hash equality across the pair).
+
 Secrets are never hardcoded: load_credentials() reads a gitignored local file,
 then borrows the existing Telegram/ntfy secrets from vrp_backtest.
 """
@@ -31,10 +40,20 @@ import sys
 
 # ── locate sibling projects ────────────────────────────────────────────────────
 HOME = os.path.expanduser("~")
-SELL_IN_MAY = os.path.join(HOME, "sell_in_may")
-SIGNAL_LAB = os.path.join(HOME, "signal_lab")
 VRP_BACKTEST = os.path.join(HOME, "vrp_backtest")
 ROOT = os.path.dirname(os.path.abspath(__file__))
+VENDOR_DIR = os.path.join(ROOT, "vendor")
+
+# The runner has no siblings, so it uses the copies under vendor/. Forcing the
+# vendored path on a machine that HAS siblings is how the two are proven equal:
+# same panel_hash, same config_hash, same everything a result is recorded under.
+FORCE_VENDOR = os.environ.get("ARENA_FORCE_VENDOR", "") not in ("", "0")   # io-boundary
+_LIVE_SIBLINGS = all(os.path.isdir(os.path.join(HOME, p))
+                     for p in ("sell_in_may", "signal_lab"))
+VENDORED = FORCE_VENDOR or not _LIVE_SIBLINGS
+_HOME_OF_SIBLINGS = VENDOR_DIR if VENDORED else HOME
+SELL_IN_MAY = os.path.join(_HOME_OF_SIBLINGS, "sell_in_may")
+SIGNAL_LAB = os.path.join(_HOME_OF_SIBLINGS, "signal_lab")
 
 # Appended (not prepended) so arena's own modules win every name clash, while the
 # siblings' internal `import config` still lands on this superset.
@@ -68,12 +87,24 @@ for _k, _v in vars(_sm).items():
     if not _k.startswith("__"):
         globals()[_k] = _v
 
-# Share sell_in_may's price cache — arena reads the same CSVs, writes none of its own.
-CACHE_DIR = _sm.CACHE_DIR
-
 # The re-export above clobbered ROOT/OUTPUT_DIR with sell_in_may's paths. Restore
-# arena's ROOT before deriving any arena directory from it.
+# arena's ROOT before deriving any arena directory from it — including CACHE_DIR
+# on the next line, which is arena's own directory in vendored mode and would
+# otherwise land inside vendor/sell_in_may/.
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# On the Mac: share sell_in_may's price cache — arena reads the same CSVs and
+# writes none of its own. On the runner there is no such cache, so arena keeps its
+# OWN committed copy (docs/DESIGN.md, yfinance-fragility risk: "the cloud runner
+# keeps its own committed cache copy so a bad yfinance day degrades to stale-cache,
+# not failure"), and the workflow commits back whatever a refresh changed.
+#
+# Assigned ABOVE the _INHERITED marker on purpose: every name up here is snapshotted
+# at its final value, so none of them can reach config_hash(). A machine's cache
+# location is not part of a result's identity, and letting it in would give the Mac
+# and the runner different config hashes for identical settings — exactly the
+# like-for-like failure gate G1 exists to catch.
+CACHE_DIR = os.path.join(ROOT, "data", "cache") if VENDORED else _sm.CACHE_DIR
 
 # Everything the re-export brought in, NAME -> VALUE. config_hash() (bottom of this
 # file) hashes what arena itself declares BELOW this line, not a sibling project's
@@ -120,7 +151,13 @@ LARGECAP_FALLBACK = [
 # data dir on purpose: the table is already cached there, so arena resolves the
 # universe offline instead of re-fetching Wikipedia. arena's own writes all go to
 # STATE_DIR / ARTIFACT_DIR / OUTPUT_DIR below.
-DATA_DIR = os.path.join(SIGNAL_LAB, "data")
+#
+# Vendored (the runner): arena's own data/, holding a byte copy of that same
+# sp500.csv. It is not a nicety — the table supplies each equity's sector anchor,
+# the anchor decides the rs_sector feature, and a missing table would build a
+# DIFFERENT panel while every other input matched. Committed, therefore, and in
+# the config_hash's skip list because it is a path, not a setting.
+DATA_DIR = os.path.join(ROOT, "data") if VENDORED else os.path.join(SIGNAL_LAB, "data")
 
 # signal_lab/cv.py (its four splitter constants)
 CV_N_SPLITS = 6
@@ -438,7 +475,13 @@ def load_credentials() -> dict:
 if __name__ == "__main__":
     print("arena config")
     print("  ROOT       :", ROOT)
+    print("  siblings   : %s (%s)%s"
+          % ("VENDORED" if VENDORED else "live", os.path.relpath(SELL_IN_MAY, ROOT)
+             if VENDORED else SELL_IN_MAY,
+             "  [ARENA_FORCE_VENDOR]" if FORCE_VENDOR else
+             ("" if _LIVE_SIBLINGS else "  [no sibling checkouts on this machine]")))
     print("  CACHE_DIR  :", CACHE_DIR)
+    print("  DATA_DIR   :", DATA_DIR)
     print("  SEED       :", SEED, "| data from", DATA_START, "| vault from", VAULT_START)
     print("  account    : $%.0f  gross<=%.1f net<=%.1f  max %d names @ %.0f%%"
           % (START_CASH, MAX_GROSS_LEV, MAX_NET_LEV, MAX_POSITIONS, 100 * MAX_NAME_WEIGHT))
