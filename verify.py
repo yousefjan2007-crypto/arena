@@ -37,9 +37,11 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here:
                          on its own, a tie goes to the incumbent, a data_hash
                          mismatch fails G1 whatever the scores say, and no
                          incumbent skips G9 while the other nine still bind.
-                         Plus the two F2 inputs with rules of their own:
-                         regime slices pass by absence, and the bootstrap CI is
-                         reproducible from a fixed rng.
+                         Plus: a rejected artifact store writes nothing (so the
+                         original evaluation can still re-store as a no-op), a
+                         candidate outside the PBO cohort gets no PBO and fails
+                         G4 unmeasured, regime slices pass by absence, and the
+                         bootstrap CI is reproducible from a fixed rng.
   8. Trial ledger        k evaluations write exactly k rows, an identical re-run
                          writes none, DSR falls monotonically as the trial count
                          grows, and every vault access is counted.
@@ -82,6 +84,7 @@ import gates
 import genome as gn
 import ledger
 import registry
+import run_deepeval
 import run_generation
 from env import CostModel, MarketEnv
 from strategy import StrategyAgent
@@ -1146,8 +1149,60 @@ def test_gates():
               and len(after) == 3 and after[-1]["reason"] == "rollback",
               "%d pointer moves, each with a history row; failing report refused: %s"
               % (len(after), refused))
+
+        # A REJECTED STORE MUST CHANGE NOTHING. Storing changed bytes under the
+        # same eval key has to raise — and leave no file behind, or the original
+        # evaluation's own byte-identical re-store would be illegal from then on
+        # and the weekly job would abort mid-persistence needing hand repair.
+        arts = os.path.join(tmp, "artifacts")
+        rng = np.random.default_rng(config.SEED)
+        lib = tuple("feat_%02d" % i for i in range(12))
+        g = gn.random_genome(rng, lib)
+        entry = {"genome": g.to_dict(), "hash": g.hash(), "op": "mutate",
+                 "parent_hash": "", "birth_gen": 0}
+        dates = pd.bdate_range("2000-01-03", periods=200)
+        base = {"dates": dates, "daily_net": rng.normal(0.0004, 0.01, len(dates)),
+                "daily_gross": rng.normal(0.0005, 0.01, len(dates)),
+                "turnover": np.abs(rng.normal(0.1, 0.01, len(dates))),
+                "costs": np.abs(rng.normal(1.0, 0.1, len(dates))),
+                "identity": ("data0000deadbeef", "panel000cafebabe", "cfg00000feedface"),
+                "generation": 4, "score": 0.5, "sharpe_prevault": 0.6,
+                "n_days_prevault": len(dates), "n_features": len(g.signal.features),
+                "first_active": 0, "regime_finite_frac": None, "n_fits": 0}
+        first = registry.store_artifact(entry, base, {"dsr": 0.9}, artifact_dir=arts)
+        listing = sorted(os.listdir(first))
+        rejected = False
+        try:
+            registry.store_artifact(entry, dict(base, daily_net=base["daily_net"] * 1.5),
+                                    {"dsr": 0.9}, artifact_dir=arts)
+        except registry.ImmutableArtifact:
+            rejected = True
+        orphans = sorted(os.listdir(first))
+        registry.store_artifact(entry, base, {"dsr": 0.9}, artifact_dir=arts)   # no-op
+        check("a rejected store writes nothing, and the original still re-stores",
+              rejected and orphans == listing and sorted(os.listdir(first)) == listing,
+              "changed series under the same eval key raised; %d files before, %d "
+              "after the rejection, %d after the identical re-store"
+              % (len(listing), len(orphans), len(os.listdir(first))))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # G4's cohort membership: CSCV is a statement about ONE cohort's selection, and
+    # a candidate that is not in that cohort's returns matrix (an all-time
+    # hall-of-fame leader from an older generation) may not borrow its number.
+    cohort = {"pbo": 0.10, "n_splits": 12870, "generation": 7,
+              "hashes": ["aaaaaaaaaaaa", PASSING_CAND["hash"]]}
+    inside, note_in = run_deepeval.cohort_pbo(cohort, PASSING_CAND["hash"])
+    outside, note_out = run_deepeval.cohort_pbo(cohort, "notinthecohort")
+    empty, _n = run_deepeval.cohort_pbo({"pbo": None, "hashes": []}, PASSING_CAND["hash"])
+    rep_in = gates.evaluate_gates(dict(PASSING_CAND, pbo=inside), PASSING_INC)
+    rep_out = gates.evaluate_gates(dict(PASSING_CAND, pbo=outside), PASSING_INC)
+    check("a candidate outside the PBO cohort gets no PBO, and G4 fails unmeasured",
+          inside == 0.10 and outside is None and empty is None
+          and rep_in["all_pass"] and rep_out["failed"] == ["G4"],
+          "in cohort -> %.2f (G4 %s) | absent -> %s (G4 %s): %s"
+          % (inside, "PASS" if rep_in["gates"]["G4"]["pass"] else "FAIL", outside,
+             "PASS" if rep_out["gates"]["G4"]["pass"] else "FAIL", note_out[:60]))
 
     # ── the two F2 inputs whose rules are not obvious from their signatures ────
     # A series that covers the 2000-02 and 2008-09 windows and stops long before

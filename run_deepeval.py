@@ -87,13 +87,16 @@ HISTORY_FILE = "deepeval_history.csv"
 # `gates_failed` is the top-ranked candidate's failures, the per-candidate detail
 # being in `candidates`. `complete` is 0 when the time budget stopped the run
 # before every candidate was evaluated.
-# ONE ROW PER RUN, NOT PER WEEK: re-running a generation appends another row.
-# Phase 7's graduation trigger ("the same champion survives 3 consecutive weekly
-# deep evals") must therefore group by `generation` and count only complete,
-# non-dry runs — the columns are here so it can.
+# THIS FILE HOLDS DECISIONS ONLY. A --dry run appends NOTHING here (its output is
+# its record), so every row describes a run that was allowed to change the
+# champion — there is no "dry" column to filter on, because there is nothing to
+# filter out. One row per RUN, not per week: re-running a generation appends
+# another row, so Phase 7's graduation trigger ("the same champion survives 3
+# consecutive weekly deep evals") groups by `generation` and counts only
+# `complete=1` rows.
 HISTORY_COLUMNS = ("generation", "champion_hash_before", "champion_hash_after",
                    "promoted", "n_candidates", "candidates", "gates_failed",
-                   "complete", "dry", "data_hash", "panel_hash", "config_hash",
+                   "complete", "data_hash", "panel_hash", "config_hash",
                    "platform")
 
 
@@ -242,11 +245,13 @@ def f2_metrics(entry, res, market, cost, generation, index, cohort, incumbent_re
     out["vault_trials"] = ledger.vault_trials(state_dir)
     out["vault_days"] = int(np.size(vault_net))
 
-    # G4 — a COHORT statistic: the same number for every candidate of a generation,
-    # because CSCV asks whether picking the in-sample best out of THIS cohort
-    # survives out of sample.
-    out["pbo"] = cohort.get("pbo")
-    out["pbo_detail"] = cohort
+    # G4 — a COHORT statistic, and only for a member of that cohort.
+    out["pbo"], pbo_note = cohort_pbo(cohort, ghash)
+    out["pbo_in_cohort"] = out["pbo"] is not None
+    out["pbo_detail"] = dict(cohort, note=pbo_note)
+    if verbose and out["pbo"] is None:
+        print("    PBO      : NOT MEASURABLE — %s. G4 fails: an unmeasured gate is "
+              "not a passed gate." % pbo_note)
 
     # G5 — 28 combinatorial purged paths with real refits. The expensive one.
     if verbose:
@@ -291,6 +296,30 @@ def f2_metrics(entry, res, market, cost, generation, index, cohort, incumbent_re
     return out
 
 
+def cohort_pbo(cohort: dict, ghash: str) -> tuple:
+    """(PBO for this candidate, why) — None unless the candidate IS in the cohort.
+
+    CSCV asks a question about ONE cohort: if you pick the in-sample best of these
+    N configurations, does it stay above the pack out of sample? The candidate has
+    to be one of the N. It often is not: candidates come from the ALL-TIME hall of
+    fame while the returns matrix belongs to the last evaluated generation, so a
+    leader from four generations ago is simply absent from it. Handing that
+    candidate the cohort's PBO would be reporting evidence about somebody else's
+    selection under its name, so it gets None instead — and gates.py's rule that
+    an unmeasurable gate is a FAILED gate does the rest. The honest fix is to
+    re-evaluate the genome inside a current cohort, not to borrow a number.
+    """
+    if cohort.get("pbo") is None:
+        return None, cohort.get("note") or "no cohort matrix for this generation"
+    if ghash not in (cohort.get("hashes") or ()):
+        return None, ("%s is not one of the %d genomes in the generation-%s returns "
+                      "matrix, so that cohort's PBO is not evidence about it"
+                      % (ghash, len(cohort.get("hashes") or ()),
+                         cohort.get("generation", "?")))
+    return cohort["pbo"], "cohort of %d genomes, %s splits" % (
+        len(cohort["hashes"]), cohort.get("n_splits"))
+
+
 def print_candidate(m: dict) -> None:
     """The measurements behind the gate table, in the order they were taken."""
     stress_sharpe = m["sharpe_stress"]
@@ -299,8 +328,7 @@ def print_candidate(m: dict) -> None:
                        m["dsr_detail"].get("sr0_threshold")))
     print("    vault    : SR %+.2f over %d days, DSR %s at N=%d accesses"
           % (m["vault_sharpe"], m["vault_days"], m["vault_dsr"], m["vault_trials"]))
-    print("    PBO      : %s (%s splits, cohort statistic)"
-          % (m["pbo"], m["pbo_detail"].get("n_splits")))
+    print("    PBO      : %s (%s)" % (m["pbo"], m["pbo_detail"].get("note")))
     c = m["cpcv_detail"]
     print("    CPCV     : %d paths, %.0f%% positive, median SR %+.2f (min %+.2f, "
           "max %+.2f), %d refits total"
@@ -348,33 +376,58 @@ def read_history(state_dir=None) -> list:
         return list(csv.DictReader(f))
 
 
-def _ledger_f2(generation: int, entry, res, identity, state_dir=None) -> bool:
-    """One F2 row per party, under the same idempotency-with-identity rule
-    run_generation applies: a duplicate key that describes DIFFERENT inputs is the
-    one case where "already recorded" silently discards this run's work."""
+def _ledger_f2(generation: int, entry, res, identity, state_dir=None) -> tuple:
+    """Append one F2 trial row. Returns (status, detail) — never raises on a clash.
+
+    status is "wrote", "already" (same key, same inputs) or "drift" (same key,
+    EARLIER inputs — the ledger keeps the older row).
+
+    WHY THIS DOES NOT RAISE WHERE run_generation DOES. There, a dropped duplicate
+    row is fatal: the population was BRED from numbers that would then appear
+    nowhere on disk (IdentityDrift's docstring). Nothing selects on an F2 row. The
+    genome was already counted in n_trials by its F0/F1 rows, this run's numbers
+    are recorded in the immutable artifact and in the deep-eval history row — both
+    stamped with this run's own identity — and the gate decision was made on the
+    fresh simulation, not on the ledger. What the older row does still own is that
+    genome's contribution to the DSR trial-Sharpe DISPERSION (F2 outranks F1 in
+    dsr_trial_sharpes), so the clash is printed loudly rather than swallowed; and
+    since every candidate in a run shares one trial set, the comparison between
+    them stays fair either way. Aborting the weekly job over it would mean a deep
+    eval could never run twice on one generation, which is exactly what happens
+    when the data refreshes between two Saturdays without a new generation.
+    """
     wrote = ledger.record_trial(generation, evolution.entry_genome(entry), "F2",
                                 res["score"], res["sharpe_prevault"],
                                 res["n_days_prevault"], identity[0], identity[1],
                                 parent_hash=evolution.parent_field(entry["parent_hash"]),
                                 birth_gen=entry["birth_gen"], state_dir=state_dir)
     if wrote:
-        return True
+        return "wrote", ""
     prior = run_generation._ledger_row(generation, entry["hash"], "F2", state_dir)  # noqa: SLF001
-    if prior is not None and run_generation._row_identity(prior) == tuple(identity):  # noqa: SLF001
-        return False
-    raise run_generation.IdentityDrift(
-        "generation %d already has an F2 row for %s recorded under different "
-        "inputs:\n    on disk : %s\n    this run: %s\n"
-        "The ledger is idempotent on (genome, generation, fidelity) and would have "
-        "dropped the row this run just produced, while the gates acted on it."
-        % (generation, entry["hash"],
-           run_generation._row_identity(prior) if prior else "(no row)",   # noqa: SLF001
-           tuple(identity)))
+    prior_id = run_generation._row_identity(prior) if prior else None    # noqa: SLF001
+    if prior_id == tuple(identity):
+        return "already", ""
+    return "drift", ("%s: generation %d already has an F2 row from an earlier "
+                     "vintage (data %s | panel %s | config %s); this run computed it "
+                     "under (data %s | panel %s | config %s)"
+                     % ((entry["hash"], generation) + (prior_id or ("?", "?", "?"))
+                        + tuple(str(v) for v in identity)))
 
 
-def store(entry, res, metrics, gate_report, decisions=None, artifact_dir=None) -> str:
-    """One immutable artifact for one party. `metrics` is None for the incumbent
-    when it was only re-simulated (no candidate battery was run on it)."""
+def store(entry, res, metrics, gate_report, decisions=None, artifact_dir=None,
+          state_dir=None) -> str:
+    """One immutable artifact for one party.
+
+    An artifact carries the vault segment of the return series, so STORING one is
+    itself a vault touch and gets its own logged access. The candidates already
+    have a "gate_eval" row from f2_metrics — this adds a row, not a new genome, so
+    it cannot change vault_trials — but the incumbent is only ever re-simulated,
+    never batteried, and its vault rows would otherwise reach disk with nothing in
+    state/vault_access.csv to show it. `grep record_vault_access` has to be a
+    complete answer to "who touched the vault", including the writer.
+    """
+    if res.get("vault_dates") is not None and len(res["vault_dates"]):
+        ledger.record_vault_access(entry["hash"], "artifact_store", state_dir)
     payload = dict(metrics or {})
     payload.pop("hash", None)
     if gate_report is not None:
@@ -480,14 +533,25 @@ def main() -> int:
     finally:
         del results
 
+    counts = {"wrote": 0, "already": 0, "drift": 0}
     for entry in parties:
         res = fresh[(entry["hash"], "base")]
         res["identity"] = identity
         res["generation"] = generation
         res["vault_dates"] = _vault_dates(market, len(res["vault_daily_net"]))
-        _ledger_f2(generation, entry, res, identity)
-    print("      ledger  : F2 rows appended for every party (n_trials now %d)"
-          % ledger.n_trials())
+        status, detail = _ledger_f2(generation, entry, res, identity)
+        counts[status] += 1
+        if status == "drift":
+            print("      ledger  : KEPT THE OLDER ROW — %s" % detail)
+    print("      ledger  : %d F2 row(s) appended, %d already on record, %d kept from "
+          "an earlier vintage (n_trials now %d)"
+          % (counts["wrote"], counts["already"], counts["drift"], ledger.n_trials()))
+    if counts["drift"]:
+        print("                Nothing this run measured is lost: the gates acted on "
+              "the fresh simulation, and %s. Only that genome's share of the DSR "
+              "trial-Sharpe dispersion is the older vintage's (see _ledger_f2)."
+              % ("the artifacts and history row carry this run's identity"
+                 if not args.dry else "a --dry run stores nothing but this printout"))
 
     # ── 2. the cohort PBO, once ───────────────────────────────────────────────
     cohort = load_cohort(generation, identity)
@@ -562,10 +626,10 @@ def main() -> int:
 
     # ── 5. persistence ────────────────────────────────────────────────────────
     if args.dry:
-        print("\n  --dry: no artifacts, no champion move, no deep-eval history row. "
-              "The %d F2 ledger rows and %d vault access(es) this run made WERE "
-              "written — the evaluation happened."
-              % (len(parties), len(measured)))
+        print("\n  --dry: no artifacts, no champion move, and NO deep-eval history "
+              "row (that file holds decisions; this run made none). The %d F2 ledger "
+              "rows and %d vault access(es) it made WERE written — the evaluation "
+              "happened." % (len(parties), len(measured)))
     else:
         decisions_for = winner[0]["hash"] if winner else (
             measured[0][0]["hash"] if measured else None)
@@ -597,7 +661,7 @@ def main() -> int:
                 for e, _r, _m in measured),
             "gates_failed": "+".join(reports[measured[0][0]["hash"]]["failed"])
             if measured else "",
-            "complete": int(complete), "dry": 0,
+            "complete": int(complete),
             "data_hash": identity[0], "panel_hash": identity[1] or "",
             "config_hash": identity[2], "platform": ledger.platform_tag()},
         )
@@ -622,15 +686,21 @@ def load_cohort(generation: int, identity) -> dict:
     are the numbers that cohort was selected on), but it is printed rather than
     swallowed, because a reader comparing PBO against the other gates is entitled
     to know the cohort is not this run's simulation.
+
+    The cohort's genome hashes come back with it: cohort_pbo() will only give this
+    number to a candidate that is actually in the matrix.
     """
     try:
         mat = ledger.load_returns_matrix(generation)
     except FileNotFoundError:
         print("\n  PBO       : no returns matrix for generation %d — G4 cannot be "
               "measured and will fail" % generation)
-        return {"pbo": None, "n_splits": 0, "note": "no cohort matrix"}
+        return {"pbo": None, "n_splits": 0, "hashes": [], "generation": generation,
+                "note": "no returns matrix for generation %d" % generation}
     R = np.asarray(mat["daily_net"], dtype=np.float64)
     out = evaluate.pbo_cscv(R, S=config.PBO_SPLITS)
+    out["hashes"] = list(mat["hashes"])
+    out["generation"] = generation
     stored = (mat["data_hash"], mat["panel_hash"], mat["config_hash"])
     drift = [n for n, a, b in zip(("data", "panel", "config"), stored, identity)
              if a and a != str(b)]

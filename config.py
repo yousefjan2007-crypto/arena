@@ -264,9 +264,16 @@ GATE_BOOT_CI = 0.95                 # G6  bootstrap CI level; lower bound must e
 GATE_STRESS_MULT = 2.0              # G7  cost stress multiplier
 GATE_STRESS_MIN_SR_RATIO = 0.5      # G7  stressed Sharpe >= this x base Sharpe
 GATE_BORROW_STRESS_MULT = 3.0       # G7  borrow-only stress
-GATE_REGIME_WINDOWS = [             # G8  the four crisis slices
-    ("2000-01-01", "2002-12-31"),
-    ("2008-01-01", "2009-12-31"),
+# G8  the four crisis slices, dated NARROWLY — peak to trough, not peak to
+# recovery. A window that contains the rebound measures the wrong thing: the 2008
+# calendar years 2008-01..2009-12 come out POSITIVE for a long-biased book that
+# was destroyed in the autumn of 2008 and carried up by 2009, and a gate cannot
+# ask "how bad was the crisis" with a number like that. These are the drawdown
+# legs: the dot-com slide to its October-2002 low, the Lehman quarter to the March
+# 2009 bottom, the COVID crash and its first-half round trip, and the 2022 repricing.
+GATE_REGIME_WINDOWS = [
+    ("2000-03-01", "2002-10-31"),
+    ("2008-09-01", "2009-03-31"),
     ("2020-01-01", "2020-06-30"),
     ("2022-01-01", "2022-12-31"),
 ]

@@ -22,12 +22,20 @@ promoted it, or how to put the old one back. Here:
     hash has no matching history row is the corruption this file exists to
     prevent, so it is checked rather than assumed.
 
-TWO DOCUMENTED EXCEPTIONS TO "WRITE-ONCE", BOTH BECAUSE THE SAME GENOME IS
+A REJECTED STORE CHANGES NOTHING. store_artifact plans every file and checks every
+immutability rule BEFORE it writes the first byte, so "same hash + same content →
+silent no-op" still holds after a store was refused. The alternative was found the
+hard way: writing the return series first and raising on the metrics conflict
+afterwards left an orphan that made the original evaluation's own re-store illegal
+from then on.
+
+THREE DOCUMENTED EXCEPTIONS TO "WRITE-ONCE", ALL BECAUSE THE SAME GENOME IS
 EVALUATED AGAIN EVERY WEEK, ON NEW DATA:
 
   metrics.json is MERGE-APPEND. It may gain keys; an existing key may never
   change. Every evaluation is filed under its own eval key —
-  (generation, data_hash, panel_hash, config_hash) — so next week's numbers land
+  (generation, data_hash, panel_hash, config_hash[, a caller tag]) — so next
+  week's numbers land
   beside this week's instead of on top of them, and re-running the SAME week
   reproduces byte-identical numbers (everything upstream is seeded) and writes
   nothing. A different number under the SAME eval key is a real corruption and
@@ -136,12 +144,17 @@ def _read_payload(path: str) -> bytes:
     return gzip.decompress(raw) if path.endswith(".gz") else raw
 
 
-def _write_once(path: str, payload: bytes, kind: str) -> bool:
-    """Write `payload` (the UNCOMPRESSED content, whatever the extension) unless
-    it is already there. True if it was written.
+def _plan_write(path: str, payload: bytes, kind: str) -> bool:
+    """Would writing `payload` (the UNCOMPRESSED content, whatever the extension)
+    here be legal, and is it necessary? True = write it, False = already there.
 
-    Identical content is a silent no-op (a resumed or re-raced run re-offers the
-    same work); different content raises.
+    CHECKS ONLY — IT WRITES NOTHING, and that is the whole point. store_artifact
+    plans every file before it writes any of them, because a rejected write used to
+    poison the artifact: the returns file went down, then the metrics conflict
+    raised, and the orphaned file left behind made even the ORIGINAL evaluation's
+    byte-identical re-store illegal from then on. "Same hash + same content →
+    silent no-op" has to survive a rejected write, so nothing may be written until
+    everything is known to be writable.
     """
     if os.path.exists(path):
         if _read_payload(path) == payload:
@@ -152,8 +165,13 @@ def _write_once(path: str, payload: bytes, kind: str) -> bool:
             "may not be edited after the fact. If the inputs really moved, the "
             "evaluation belongs to a new eval key (see registry.py), not to this "
             "file." % (kind, path))
-    _atomic_write(path, _gzip_bytes(payload) if path.endswith(".gz") else payload)
     return True
+
+
+def _commit(plan: list) -> None:
+    """Write the planned (path, payload) pairs. Every check already passed."""
+    for path, payload in plan:
+        _atomic_write(path, _gzip_bytes(payload) if path.endswith(".gz") else payload)
 
 
 def _json_bytes(obj) -> bytes:
@@ -244,13 +262,14 @@ def _lineage(entry: dict) -> dict:
             "birth_gen": int(entry.get("birth_gen", 0))}
 
 
-def _store_genome(path: str, entry: dict) -> None:
+def _plan_genome(path: str, entry: dict):
     """genome.json — the body is immutable, the lineage list is append-only.
+    Returns the payload to write, or None when the file already says this.
 
     A genome re-discovered from a different parent is not a conflict: it is the
     same strategy reached twice, which is a fact about the search worth keeping.
     A different genome BODY under the same hash would be a sha256 collision, and
-    raises.
+    raises. Checks only — see _plan_write.
     """
     ghash = entry["hash"]
     body = entry["genome"]
@@ -264,13 +283,15 @@ def _store_genome(path: str, entry: dict) -> None:
                 "sha256 of the canonical genome, so this is a collision or a "
                 "corrupted artifact: %s" % (ghash, path))
         if line in current["lineage"]:
-            return                                   # same genome, same story
+            return None                              # same genome, same story
         payload = dict(current, lineage=current["lineage"] + [line])
-    _atomic_write(path, _json_bytes(payload))
+    return _json_bytes(payload)
 
 
-def _store_metrics(path: str, ghash: str, key: str, record: dict) -> None:
-    """metrics.json — merge-append on the eval key (see the module docstring)."""
+def _plan_metrics(path: str, ghash: str, key: str, record: dict):
+    """metrics.json — merge-append on the eval key (see the module docstring).
+    Returns the payload to write, or None when this evaluation is already filed.
+    Checks only — see _plan_write."""
     payload = {"hash": ghash, "note": METRICS_NOTE, "evals": {}}
     if os.path.exists(path):
         payload = json.loads(_read_payload(path).decode())
@@ -278,7 +299,7 @@ def _store_metrics(path: str, ghash: str, key: str, record: dict) -> None:
     prior = payload["evals"].get(key)
     if prior is not None:
         if prior == record:
-            return
+            return None
         raise ImmutableArtifact(
             "metrics.json for %s already holds different numbers under eval key\n"
             "    %s\n"
@@ -287,7 +308,7 @@ def _store_metrics(path: str, ghash: str, key: str, record: dict) -> None:
             "written: %s" % (ghash, key, path))
     payload["evals"][key] = record
     payload["note"] = METRICS_NOTE
-    _atomic_write(path, _json_bytes(payload))
+    return _json_bytes(payload)
 
 
 def _target(root: str, base: str, ext: str, key: str, payload: bytes) -> str:
@@ -325,6 +346,14 @@ def store_artifact(genome_entry: dict, f1_result: dict, f2_metrics=None,
                     store — the record then says so rather than inventing nulls.
     `decisions`     Tier B decision-log rows (the winner and the champion get
                     these; a whole population would be gigabytes).
+
+    PLAN EVERYTHING, THEN WRITE. Every immutability check below runs before the
+    first byte is written, so a rejected store leaves the directory exactly as it
+    found it. It did not always: the returns file was written first and the
+    metrics conflict raised afterwards, and the orphan left behind made the
+    ORIGINAL evaluation's own byte-identical re-store illegal from then on — a
+    weekly job that could only be repaired by hand. Nothing here is allowed to
+    half-happen.
     """
     ghash = genome_entry["hash"]
     identity = tuple(str(v) for v in f1_result["identity"])
@@ -333,17 +362,22 @@ def store_artifact(genome_entry: dict, f1_result: dict, f2_metrics=None,
     root = artifact_path(ghash, artifact_dir)
     os.makedirs(root, exist_ok=True)
 
-    _store_genome(os.path.join(root, GENOME_FILE), genome_entry)
+    plan = []                                    # (path, uncompressed payload)
+    genome_payload = _plan_genome(os.path.join(root, GENOME_FILE), genome_entry)
+    if genome_payload is not None:
+        plan.append((os.path.join(root, GENOME_FILE), genome_payload))
 
     returns_payload = _returns_csv(f1_result).encode()
     returns_file = _target(root, "daily_returns", ".csv.gz", key, returns_payload)
-    _write_once(returns_file, returns_payload, "daily returns")
+    if _plan_write(returns_file, returns_payload, "daily returns"):
+        plan.append((returns_file, returns_payload))
 
     decisions_file = None
     if decisions is not None:
         dec_payload = _decisions_csv(decisions, ghash, identity).encode()
         decisions_file = _target(root, "decisions", ".csv.gz", key, dec_payload)
-        _write_once(decisions_file, dec_payload, "decision log")
+        if _plan_write(decisions_file, dec_payload, "decision log"):
+            plan.append((decisions_file, dec_payload))
 
     dates = f1_result["dates"]
     f2 = dict(f2_metrics) if f2_metrics else None
@@ -366,7 +400,11 @@ def store_artifact(genome_entry: dict, f1_result: dict, f2_metrics=None,
         "gate_report": _jsonable(gate_report),
     }
     record = json.loads(json.dumps(record))       # one canonical JSON shape to compare
-    _store_metrics(os.path.join(root, METRICS_FILE), ghash, key, record)
+    metrics_payload = _plan_metrics(os.path.join(root, METRICS_FILE), ghash, key, record)
+    if metrics_payload is not None:
+        plan.append((os.path.join(root, METRICS_FILE), metrics_payload))
+
+    _commit(plan)                                 # every check passed; now write
     return root
 
 
@@ -556,13 +594,24 @@ if __name__ == "__main__":
         # Immutability: identical re-store is silent; a changed series raises.
         store_artifact(entries[0], res_a, {"dsr": 0.97, "gate_report": gates},
                        decisions, artifact_dir=arts)
+        before = sorted(os.listdir(path_a))
         moved = dict(res_a, daily_net=res_a["daily_net"] + 1e-6)
         try:
-            store_artifact(entries[0], moved, artifact_dir=arts)
+            store_artifact(entries[0], moved, {"dsr": 0.97, "gate_report": gates},
+                           decisions, artifact_dir=arts)
             raised = "NO — the registry let history be rewritten"
         except ImmutableArtifact:
             raised = "ImmutableArtifact"
         print("  re-store   : identical -> silent no-op | changed returns -> %s" % raised)
+        # ...and the rejection left NOTHING behind, so the original evaluation can
+        # still be re-stored as the no-op it is.
+        after = sorted(os.listdir(path_a))
+        store_artifact(entries[0], res_a, {"dsr": 0.97, "gate_report": gates},
+                       decisions, artifact_dir=arts)
+        print("  rejected   : wrote no file (%s), and the original re-stores fine: %s"
+              % ("clean" if after == before else "ORPHANS: %s" % set(after) - set(before),
+                 sorted(os.listdir(path_a)) == before))
+        assert after == before, "a rejected store left an orphan file behind"
 
         # A new week (new data hash, one more bar, slightly different numbers)
         # files a second eval beside the first instead of overwriting it.
