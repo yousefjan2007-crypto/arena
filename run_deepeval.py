@@ -94,10 +94,13 @@ HISTORY_FILE = "deepeval_history.csv"
 # another row, so Phase 7's graduation trigger ("the same champion survives 3
 # consecutive weekly deep evals") groups by `generation` and counts only
 # `complete=1` rows.
+# `ledger_drift` names any party whose F2 trial row was already on record under an
+# EARLIER data/panel/config vintage, so the older row still feeds G2/G3's
+# trial-Sharpe dispersion (see _ledger_f2). Empty is the normal case.
 HISTORY_COLUMNS = ("generation", "champion_hash_before", "champion_hash_after",
                    "promoted", "n_candidates", "candidates", "gates_failed",
-                   "complete", "data_hash", "panel_hash", "config_hash",
-                   "platform")
+                   "ledger_drift", "complete", "data_hash", "panel_hash",
+                   "config_hash", "platform")
 
 
 def history_path(state_dir=None) -> str:
@@ -248,6 +251,7 @@ def f2_metrics(entry, res, market, cost, generation, index, cohort, incumbent_re
     # G4 — a COHORT statistic, and only for a member of that cohort.
     out["pbo"], pbo_note = cohort_pbo(cohort, ghash)
     out["pbo_in_cohort"] = out["pbo"] is not None
+    out["pbo_note"] = pbo_note                   # gates.py prints this when pbo is None
     out["pbo_detail"] = dict(cohort, note=pbo_note)
     if verbose and out["pbo"] is None:
         print("    PBO      : NOT MEASURABLE — %s. G4 fails: an unmeasured gate is "
@@ -358,8 +362,27 @@ def print_candidate(m: dict) -> None:
 
 # ── persistence ────────────────────────────────────────────────────────────────
 def append_history(row: dict, state_dir=None) -> str:
+    """Append one decision row, refusing to append into a file of another shape.
+
+    csv.writer appends positionally, so a file written by an older column list
+    would take today's fields silently misaligned — every value shifted one column
+    left from the first dropped name, and nothing in the file to say so. The
+    header is therefore checked before the write and a mismatch raises: this file
+    is the record Phase 7's graduation trigger reads, and a misaligned record is
+    worse than a missing one.
+    """
     path = history_path(state_dir)
     new = not os.path.exists(path)
+    if not new:
+        with open(path, newline="") as f:
+            header = next(csv.reader(f), [])
+        if tuple(header) != HISTORY_COLUMNS:
+            raise ValueError(
+                "%s has columns\n    %s\nbut this version writes\n    %s\n"
+                "Appending would misalign every field. Move the old file aside "
+                "(it is a record of decisions made under a different schema) or "
+                "migrate it; nothing was written."
+                % (path, ",".join(header), ",".join(HISTORY_COLUMNS)))
     with open(path, "a", newline="") as f:
         w = csv.writer(f)
         if new:
@@ -376,42 +399,85 @@ def read_history(state_dir=None) -> list:
         return list(csv.DictReader(f))
 
 
-def _ledger_f2(generation: int, entry, res, identity, state_dir=None) -> tuple:
-    """Append one F2 trial row. Returns (status, detail) — never raises on a clash.
+def _ledger_f2(generation: int, entry, res, identity, state_dir=None) -> dict:
+    """Append one F2 trial row. Returns a record of what happened:
 
-    status is "wrote", "already" (same key, same inputs) or "drift" (same key,
-    EARLIER inputs — the ledger keeps the older row).
+        {"status": "wrote" | "already" | "drift", "hash", "generation",
+         "prior_identity", "identity", "message"}
 
-    WHY THIS DOES NOT RAISE WHERE run_generation DOES. There, a dropped duplicate
-    row is fatal: the population was BRED from numbers that would then appear
-    nowhere on disk (IdentityDrift's docstring). Nothing selects on an F2 row. The
-    genome was already counted in n_trials by its F0/F1 rows, this run's numbers
-    are recorded in the immutable artifact and in the deep-eval history row — both
-    stamped with this run's own identity — and the gate decision was made on the
-    fresh simulation, not on the ledger. What the older row does still own is that
-    genome's contribution to the DSR trial-Sharpe DISPERSION (F2 outranks F1 in
-    dsr_trial_sharpes), so the clash is printed loudly rather than swallowed; and
-    since every candidate in a run shares one trial set, the comparison between
-    them stays fair either way. Aborting the weekly job over it would mean a deep
-    eval could never run twice on one generation, which is exactly what happens
-    when the data refreshes between two Saturdays without a new generation.
+    "drift" = this generation already has an F2 row for this genome, recorded
+    under DIFFERENT inputs (the data cache refreshed, or a config knob moved). The
+    ledger is idempotent on (genome, generation, fidelity), so the older row
+    stands and this run's row is not written.
+
+    WHAT THAT COSTS, STATED PRECISELY — the earlier version of this docstring said
+    "nothing selects on an F2 row", which is wrong in the way that matters.
+    Nothing is BRED from it (run_generation selects on F0/F1 scores) and the gate
+    decision is made on this run's fresh simulation, not on the ledger. But
+    ledger.dsr_trial_sharpes() and vault_trial_sharpes() return each genome's
+    BEST-FIDELITY row — F2 outranks F1 outranks F0 — so a stale F2 row IS the
+    value those accessors hand to G2 and G3, and it moves `var(all_sharpes)`,
+    which is what sets the sr0 threshold both gates are measured against. The
+    direction is uncontrolled and it is not always conservative: understating the
+    dispersion LOWERS sr0 and therefore EASES G2. The review measured the
+    sensitivity on this ledger — halving 2 of the 21 trial values lifts a
+    candidate's DSR from 0.027 to 0.046 — so today the effect is bounded far below
+    the 0.95 threshold, but it is a real gate input going stale, not a cosmetic
+    record-keeping wrinkle. Hence: printed at the point it happens, stored in the
+    artifact's metrics beside dsr_detail, and carried as a column in
+    state/deepeval_history.csv, so an artifact reader sees it without the job log.
+
+    WHY NOT RAISE, AS run_generation DOES. There a dropped duplicate is fatal —
+    the population was bred from numbers that would then appear nowhere on disk
+    (IdentityDrift's docstring). Here, aborting would mean a deep eval can never
+    run twice on one generation, which is exactly what happens when the data
+    refreshes between two Saturdays without a new generation in between: the
+    weekly job would simply stop working, having measured everything correctly.
+
+    THE ALTERNATIVE THAT WAS AVAILABLE AND DECLINED, so Phase 6+ does not have to
+    rediscover it: keep-newer-by-append. Add the identity triple to record_trial's
+    idempotency key, and the newer row appends instead of being dropped; the
+    accessors need no change, because their stable sort on
+    ["genome_hash", "_rank", "generation"] + tail(1) already prefers the last row
+    written for a genome, and n_trials counts DISTINCT genome hashes so it stays
+    put. That is the better answer to the staleness above. It was declined here
+    because record_trial's key is Phase-4 idempotency semantics that run_generation
+    depends on for resume and for its IdentityDrift guard, and widening it is a
+    change to that contract rather than to this file. It belongs in a task that
+    can re-run the Phase-4 determinism and resume proofs.
     """
     wrote = ledger.record_trial(generation, evolution.entry_genome(entry), "F2",
                                 res["score"], res["sharpe_prevault"],
                                 res["n_days_prevault"], identity[0], identity[1],
                                 parent_hash=evolution.parent_field(entry["parent_hash"]),
                                 birth_gen=entry["birth_gen"], state_dir=state_dir)
+    out = {"hash": entry["hash"], "generation": int(generation),
+           "identity": tuple(str(v) for v in identity), "prior_identity": None,
+           "message": ""}
     if wrote:
-        return "wrote", ""
+        return dict(out, status="wrote")
     prior = run_generation._ledger_row(generation, entry["hash"], "F2", state_dir)  # noqa: SLF001
-    prior_id = run_generation._row_identity(prior) if prior else None    # noqa: SLF001
+    if prior is None:
+        # record_trial said "already there" and the file says otherwise: the ledger
+        # changed under this run (a concurrent writer, a hand edit, a truncated
+        # file). Unlike a drift, THE ROW IS SIMPLY LOST — there is no older row
+        # standing in for it — so this is an error, exactly as run_generation
+        # treats the same case.
+        raise run_generation.IdentityDrift(
+            "the trial ledger reports an existing F2 row for %s at generation %d "
+            "but no such row can be read back. The ledger changed under this run; "
+            "this evaluation would be recorded nowhere at all. Nothing was "
+            "promoted." % (entry["hash"], generation))
+    prior_id = run_generation._row_identity(prior)                       # noqa: SLF001
     if prior_id == tuple(identity):
-        return "already", ""
-    return "drift", ("%s: generation %d already has an F2 row from an earlier "
-                     "vintage (data %s | panel %s | config %s); this run computed it "
-                     "under (data %s | panel %s | config %s)"
-                     % ((entry["hash"], generation) + (prior_id or ("?", "?", "?"))
-                        + tuple(str(v) for v in identity)))
+        return dict(out, status="already")
+    return dict(out, status="drift", prior_identity=prior_id,
+                message=("%s: generation %d already has an F2 row from an earlier "
+                         "vintage (data %s | panel %s | config %s); this run computed "
+                         "it under (data %s | panel %s | config %s). The older row "
+                         "stands and still feeds the DSR trial-Sharpe dispersion."
+                         % ((entry["hash"], generation) + prior_id
+                            + tuple(str(v) for v in identity))))
 
 
 def store(entry, res, metrics, gate_report, decisions=None, artifact_dir=None,
@@ -534,24 +600,27 @@ def main() -> int:
         del results
 
     counts = {"wrote": 0, "already": 0, "drift": 0}
+    drifted: dict = {}                 # hash -> the drift record, stored and reported
     for entry in parties:
         res = fresh[(entry["hash"], "base")]
         res["identity"] = identity
         res["generation"] = generation
         res["vault_dates"] = _vault_dates(market, len(res["vault_daily_net"]))
-        status, detail = _ledger_f2(generation, entry, res, identity)
-        counts[status] += 1
-        if status == "drift":
-            print("      ledger  : KEPT THE OLDER ROW — %s" % detail)
+        rec = _ledger_f2(generation, entry, res, identity)
+        counts[rec["status"]] += 1
+        if rec["status"] == "drift":
+            drifted[entry["hash"]] = rec
+            print("      ledger  : KEPT THE OLDER ROW — %s" % rec["message"])
     print("      ledger  : %d F2 row(s) appended, %d already on record, %d kept from "
           "an earlier vintage (n_trials now %d)"
           % (counts["wrote"], counts["already"], counts["drift"], ledger.n_trials()))
-    if counts["drift"]:
-        print("                Nothing this run measured is lost: the gates acted on "
-              "the fresh simulation, and %s. Only that genome's share of the DSR "
-              "trial-Sharpe dispersion is the older vintage's (see _ledger_f2)."
-              % ("the artifacts and history row carry this run's identity"
-                 if not args.dry else "a --dry run stores nothing but this printout"))
+    if drifted:
+        print("                Those genomes' BEST-FIDELITY rows are the older "
+              "vintage's, so that is the value dsr_trial_sharpes() feeds to G2 and "
+              "vault_trial_sharpes() to G3 — it moves the trial-Sharpe dispersion "
+              "that sets sr0, in an uncontrolled direction (understated dispersion "
+              "EASES G2). Recorded in each artifact's metrics and in the "
+              "deepeval_history ledger_drift column, not just here.")
 
     # ── 2. the cohort PBO, once ───────────────────────────────────────────────
     cohort = load_cohort(generation, identity)
@@ -570,7 +639,8 @@ def main() -> int:
                        "window": (str(inc_res["dates"][0].date()),
                                   str(inc_res["dates"][-1].date())),
                        "resimulated": True,
-                       "sharpe": evaluate.sharpe(inc_res["daily_net"])}
+                       "sharpe": evaluate.sharpe(inc_res["daily_net"]),
+                       "ledger_drift": drifted.get(incumbent["hash"])}
 
     measured, reports, complete = [], {}, True
     for i, entry in enumerate(candidates):
@@ -587,6 +657,9 @@ def main() -> int:
         m = f2_metrics(entry, res, market, base_cost, generation, i, cohort,
                        incumbent_res=inc_res, n_jobs=args.jobs)
         m["sharpe_stress"] = evaluate.sharpe(fresh[(entry["hash"], "stress")]["daily_net"])
+        # Stored beside dsr_detail, because it is a caveat ON the DSR: this
+        # genome's trial-Sharpe contribution came from an older vintage's row.
+        m["ledger_drift"] = drifted.get(entry["hash"])
         print_candidate(m)
         report = gates.evaluate_gates(m, inc_metrics)
         print()
@@ -661,6 +734,11 @@ def main() -> int:
                 for e, _r, _m in measured),
             "gates_failed": "+".join(reports[measured[0][0]["hash"]]["failed"])
             if measured else "",
+            # hash:prior_data|prior_panel|prior_config per drifted party, so the
+            # caveat on G2/G3's dispersion is in the decision record itself.
+            "ledger_drift": ";".join(
+                "%s:%s" % (h, "|".join(rec["prior_identity"]))
+                for h, rec in sorted(drifted.items())),
             "complete": int(complete),
             "data_hash": identity[0], "panel_hash": identity[1] or "",
             "config_hash": identity[2], "platform": ledger.platform_tag()},

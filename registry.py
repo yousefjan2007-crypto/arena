@@ -360,7 +360,10 @@ def store_artifact(genome_entry: dict, f1_result: dict, f2_metrics=None,
     generation = int(f1_result["generation"])
     key = eval_key(generation, identity, str(f1_result.get("eval_tag", "")))
     root = artifact_path(ghash, artifact_dir)
-    os.makedirs(root, exist_ok=True)
+    # No mkdir here: _atomic_write creates the directory for the first file it
+    # writes, so a first-ever store that is REJECTED leaves not even an empty
+    # directory behind — the same "a rejected store changes nothing" rule, applied
+    # to the container as well as the contents.
 
     plan = []                                    # (path, uncompressed payload)
     genome_payload = _plan_genome(os.path.join(root, GENOME_FILE), genome_entry)
@@ -609,7 +612,8 @@ if __name__ == "__main__":
         store_artifact(entries[0], res_a, {"dsr": 0.97, "gate_report": gates},
                        decisions, artifact_dir=arts)
         print("  rejected   : wrote no file (%s), and the original re-stores fine: %s"
-              % ("clean" if after == before else "ORPHANS: %s" % set(after) - set(before),
+              % ("clean" if after == before
+                 else "ORPHANS: %s" % (set(after) - set(before)),
                  sorted(os.listdir(path_a)) == before))
         assert after == before, "a rejected store left an orphan file behind"
 

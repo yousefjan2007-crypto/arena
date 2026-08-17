@@ -144,8 +144,19 @@ def _g3(cand, cfg) -> dict:
 
 
 def _g4(cand, cfg) -> dict:
+    """CSCV over the generation's pre-vault returns matrix — a COHORT statistic.
+
+    When there is no number, the note says WHY there is no number (the caller puts
+    it in `pbo_note`): "unmeasured" and "measured at 0.51" both fail, but only one
+    of them is about the candidate, and a gate table that could not tell them apart
+    would send a reader hunting through the job log.
+    """
     pbo = _num(cand.get("pbo"))
-    return _gate("G4", pbo is not None and pbo <= cfg.GATE_MAX_PBO, pbo, cfg.GATE_MAX_PBO,
+    if pbo is None:
+        return _gate("G4", False, None, cfg.GATE_MAX_PBO,
+                     "NOT MEASURABLE — %s. An unmeasured gate is not a passed gate."
+                     % (cand.get("pbo_note") or "no PBO was supplied"))
+    return _gate("G4", pbo <= cfg.GATE_MAX_PBO, pbo, cfg.GATE_MAX_PBO,
                  "CSCV over the generation's pre-vault returns matrix (S=%d): a "
                  "COHORT statistic, not a per-genome one" % cfg.PBO_SPLITS)
 

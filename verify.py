@@ -1196,13 +1196,79 @@ def test_gates():
     outside, note_out = run_deepeval.cohort_pbo(cohort, "notinthecohort")
     empty, _n = run_deepeval.cohort_pbo({"pbo": None, "hashes": []}, PASSING_CAND["hash"])
     rep_in = gates.evaluate_gates(dict(PASSING_CAND, pbo=inside), PASSING_INC)
-    rep_out = gates.evaluate_gates(dict(PASSING_CAND, pbo=outside), PASSING_INC)
+    rep_out = gates.evaluate_gates(dict(PASSING_CAND, pbo=outside, pbo_note=note_out),
+                                   PASSING_INC)
     check("a candidate outside the PBO cohort gets no PBO, and G4 fails unmeasured",
           inside == 0.10 and outside is None and empty is None
           and rep_in["all_pass"] and rep_out["failed"] == ["G4"],
           "in cohort -> %.2f (G4 %s) | absent -> %s (G4 %s): %s"
           % (inside, "PASS" if rep_in["gates"]["G4"]["pass"] else "FAIL", outside,
              "PASS" if rep_out["gates"]["G4"]["pass"] else "FAIL", note_out[:60]))
+    # ...and the table says WHY, rather than showing a bare failure a reader would
+    # have to go to the job log to explain.
+    g4_line = [ln for ln in gates.gate_table(rep_out) if ln.strip().startswith("G4")][0]
+    check("...and the gate table carries the reason, not the generic CSCV note",
+          "NOT MEASURABLE" in g4_line and "not one of the" in g4_line
+          and "COHORT statistic" not in g4_line, g4_line.strip()[:104])
+
+    # The decision record's schema is checked before an append: csv.writer appends
+    # positionally, so a file from an older column list would silently misalign
+    # every field of every future row.
+    tmp2 = tempfile.mkdtemp(prefix="arena_hist_")
+    try:
+        row = {c: "x" for c in run_deepeval.HISTORY_COLUMNS}
+        run_deepeval.append_history(row, state_dir=tmp2)
+        run_deepeval.append_history(row, state_dir=tmp2)
+        good = len(run_deepeval.read_history(tmp2)) == 2
+        with open(run_deepeval.history_path(tmp2), "w") as f:
+            f.write(",".join(run_deepeval.HISTORY_COLUMNS[:-3]) + "\n")   # an older schema
+        refused = False
+        try:
+            run_deepeval.append_history(row, state_dir=tmp2)
+        except ValueError:
+            refused = True
+        check("appending to a deep-eval history of another shape fails loudly",
+              good and refused,
+              "two rows appended and read back; a %d-column file refused a "
+              "%d-column row" % (len(run_deepeval.HISTORY_COLUMNS) - 3,
+                                 len(run_deepeval.HISTORY_COLUMNS)))
+    finally:
+        shutil.rmtree(tmp2, ignore_errors=True)
+
+    # An F2 row whose key is taken by an EARLIER vintage is kept (and reported);
+    # one that record_trial claims exists but that cannot be read back is LOST,
+    # and that is an error, not a drift.
+    tmp3 = tempfile.mkdtemp(prefix="arena_f2_")
+    try:
+        ledger.forget_cache()
+        g2 = gn.random_genome(np.random.default_rng(7), tuple("f%02d" % i for i in range(12)))
+        e2 = {"genome": g2.to_dict(), "hash": g2.hash(), "op": "seed",
+              "parent_hash": "", "birth_gen": 0}
+        r2 = {"score": 0.4, "sharpe_prevault": 0.5, "n_days_prevault": 300}
+        # The config hash on a row is always the WRITING process's own
+        # (ledger.record_trial takes only the data and panel hashes), so a
+        # like-for-like identity here has to carry this process's.
+        ident_a = ("dataA", "panelA", config.config_hash())
+        ident_b = ("dataB", "panelB", config.config_hash())
+        first = run_deepeval._ledger_f2(3, e2, r2, ident_a, state_dir=tmp3)   # noqa: SLF001
+        same = run_deepeval._ledger_f2(3, e2, r2, ident_a, state_dir=tmp3)    # noqa: SLF001
+        drift = run_deepeval._ledger_f2(3, e2, r2, ident_b, state_dir=tmp3)   # noqa: SLF001
+        os.remove(ledger.ledger_path(tmp3))      # the row record_trial remembers vanishes
+        lost = False
+        try:
+            run_deepeval._ledger_f2(3, e2, r2, ident_b, state_dir=tmp3)       # noqa: SLF001
+        except run_generation.IdentityDrift:
+            lost = True
+        check("an F2 row taken by an earlier vintage drifts; an unreadable one raises",
+              first["status"] == "wrote" and same["status"] == "already"
+              and drift["status"] == "drift"
+              and drift["prior_identity"] == ident_a and lost,
+              "wrote -> already -> drift (prior %s, kept), and a row that cannot be "
+              "read back raises instead of pretending an older row stands"
+              % "|".join(drift["prior_identity"]))
+    finally:
+        ledger.forget_cache()
+        shutil.rmtree(tmp3, ignore_errors=True)
 
     # ── the two F2 inputs whose rules are not obvious from their signatures ────
     # A series that covers the 2000-02 and 2008-09 windows and stops long before
