@@ -96,11 +96,16 @@ def _eval_for(art: dict, generation: int) -> dict:
     the same generation was evaluated more than once (a second look at the vault
     is a later, more deflated, and therefore more honest record than the first)."""
     evals = art.get("evals") or {}
-    matching = [(k, v) for k, v in sorted(evals.items())
+    # File order, not sorted order: the eval key ends in a trial-count tag
+    # ("trials21.vault2") that sorts lexicographically, so sorting would rank
+    # trials9 above trials21 and hand back an EARLIER, less deflated record while
+    # claiming it was the latest. json.loads preserves insertion order, and
+    # insertion order here is the order the evaluations were filed.
+    matching = [v for k, v in evals.items()
                 if k.split("|")[0] == "%04d" % int(generation)]
     if not matching:
-        matching = sorted(evals.items())
-    return matching[-1][1] if matching else {}
+        matching = list(evals.values())
+    return matching[-1] if matching else {}
 
 
 def report_subject(generation: int, state_dir=None, artifact_dir=None) -> dict:
