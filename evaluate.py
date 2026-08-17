@@ -34,10 +34,11 @@ This module is where that is enforced, structurally:
     `vault_daily_net`, and nothing in this file reads it.
 
   GREP-ABLE INVARIANT: search the repo for `vault_daily_net` / `vault_`. Outside
-  gates.py (Phase 5, which counts every access through ledger.record_vault_access)
-  every hit must be a store or a pass-through — never an input to a comparison, a
-  sort, a Sharpe, or a score. If that stops being true, the vault is gone and the
-  last six years of data stop being evidence.
+  run_deepeval.py (the gate runner, which logs every access through
+  ledger.record_vault_access before reading a single vault day) every hit must be
+  a store or a pass-through — never an input to a comparison, a sort, a Sharpe, or
+  a score. If that stops being true, the vault is gone and the last six years of
+  data stop being evidence.
 
 WHY F0 AND F1 CAN DISAGREE, AND WHY THAT IS NOT A BUG: F0 overrides the genome's
 rebalance and refit cadence and trades a different universe over different years.

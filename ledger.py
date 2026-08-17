@@ -35,9 +35,10 @@ WHAT MAKES TWO ROWS COMPARABLE (gate G1's raw material) is carried on every row:
                x86 runner — so a cross-platform comparison must be visible as one.
 
 The counterpart file, `state/vault_access.csv`, is the honesty tax on the vault:
-Phase 5's gates are the only code allowed to read post-VAULT_START days, and each
-read appends a row here so vault-DSR can be deflated by how often the vault has
-been consulted. It is deliberately NOT idempotent — asking twice IS two looks.
+run_deepeval.py's gate stack is the only code allowed to read post-VAULT_START
+days, and each read appends a row here so vault-DSR can be deflated by how often
+the vault has been consulted. It is deliberately NOT idempotent — asking twice IS
+two looks, and vault_trial_sharpes() is what hands G3 that count.
 """
 from __future__ import annotations
 

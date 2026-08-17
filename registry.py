@@ -161,11 +161,22 @@ def _json_bytes(obj) -> bytes:
 
 
 # ── artifact ───────────────────────────────────────────────────────────────────
-def eval_key(generation: int, identity) -> str:
+def eval_key(generation: int, identity, tag: str = "") -> str:
     """The coordinates of ONE evaluation: which generation, on which data, panel
     and settings. Two evaluations sharing this key must agree number for number —
-    everything upstream is seeded — so it is the key metrics.json merges on."""
-    return "%04d|%s|%s|%s" % ((int(generation),) + tuple(str(v) for v in identity))
+    everything upstream is seeded — so it is the key metrics.json merges on.
+
+    `tag` exists because that promise is only true for numbers computed from the
+    market. Some are not: a deflated Sharpe is deflated by the TRIAL LEDGER, and
+    the ledger grows — re-running the same deep eval is genuinely another look at
+    the vault, so the same candidate honestly scores a slightly lower vault DSR
+    the second time. The caller (run_deepeval, via `f1_result["eval_tag"]`) puts
+    the counts its numbers depend on in here, so a second look is filed as a
+    second evaluation instead of colliding with the first. Numbers that depend on
+    NOTHING but the market never need it.
+    """
+    parts = (int(generation),) + tuple(str(v) for v in identity)
+    return "%04d|%s|%s|%s" % parts + ("|%s" % tag if tag else "")
 
 
 def _key8(key: str) -> str:
@@ -306,8 +317,9 @@ def store_artifact(genome_entry: dict, f1_result: dict, f2_metrics=None,
     `f1_result`     an evaluate.full_eval result PLUS two keys the caller owns:
                       identity    (data_hash, panel_hash, config_hash)
                       generation  which generation this evaluation belongs to
-                    and optionally `vault_dates` alongside `vault_daily_net`
-                    (see _returns_csv for why the dates are the caller's).
+                    optionally `vault_dates` alongside `vault_daily_net` (see
+                    _returns_csv for why the dates are the caller's), and
+                    optionally `eval_tag` (see eval_key).
     `f2_metrics`    the F2 battery for this evaluation, gate report included
                     under "gate_report" when there is one. None for an F1-only
                     store — the record then says so rather than inventing nulls.
@@ -317,7 +329,7 @@ def store_artifact(genome_entry: dict, f1_result: dict, f2_metrics=None,
     ghash = genome_entry["hash"]
     identity = tuple(str(v) for v in f1_result["identity"])
     generation = int(f1_result["generation"])
-    key = eval_key(generation, identity)
+    key = eval_key(generation, identity, str(f1_result.get("eval_tag", "")))
     root = artifact_path(ghash, artifact_dir)
     os.makedirs(root, exist_ok=True)
 
