@@ -265,6 +265,42 @@ def record_vault_access(genome_hash: str, reason: str, state_dir=None) -> None:
     _append(vault_path(state_dir), VAULT_COLUMNS, [genome_hash, reason])
 
 
+def vault_trial_sharpes(state_dir=None) -> np.ndarray:
+    """Gate G3's `all_sharpes`: one DAILY Sharpe per genome that has SEEN the vault.
+
+    The vault counterpart of dsr_trial_sharpes, and it exists for the same reason —
+    so that no caller assembles a DSR input at the call site and gets the units or
+    the count wrong. DESIGN's G3 says "vault DSR >= 0.90 at N = vault_trials", so
+    the length of what comes back is vault_trials() by construction, exactly as
+    dsr_trial_sharpes' length is n_trials().
+
+    THE VALUES ARE PRE-VAULT SHARPES, and that is deliberate. Nothing in this
+    project stores a per-genome VAULT Sharpe — writing one would make the vault a
+    number selection could rank on, which is the whole thing the vault prevents.
+    What deflated_sharpe needs from `all_sharpes` is a DISPERSION (how far the best
+    of N tries strays from zero by luck) and a COUNT; the trial-Sharpe spread is
+    the honest estimate of the first, and the vault-access count is exactly the
+    second. A genome that has looked at the vault but somehow has no ledger row
+    contributes 0.0 rather than being dropped — dropping it would shrink N, which
+    is the one direction this correction may not be wrong in.
+    """
+    path = vault_path(state_dir)
+    if not os.path.exists(path):
+        return np.array([], dtype=np.float64)
+    with open(path, newline="") as f:
+        seen = sorted({row["genome_hash"] for row in csv.DictReader(f)})
+    df = read_ledger(state_dir)
+    by_hash = {}
+    if len(df):
+        order = df.assign(_rank=df["fidelity"].map({f: i for i, f in enumerate(FIDELITIES)}))
+        order = order.sort_values(["genome_hash", "_rank", "generation"], kind="mergesort")
+        best = order.groupby("genome_hash", sort=True).tail(1)
+        vals = pd.to_numeric(best["sharpe_prevault"], errors="coerce").to_numpy(dtype=np.float64)
+        by_hash = dict(zip(best["genome_hash"], np.where(np.isfinite(vals), vals, 0.0)))
+    out = np.array([by_hash.get(h, 0.0) for h in seen], dtype=np.float64)
+    return out / np.sqrt(config.TRADING_DAYS_YEAR)
+
+
 def vault_trials(state_dir=None) -> int:
     """Distinct genomes that have ever been shown the vault — the N that deflates
     the vault Sharpe in gate G3."""
@@ -423,8 +459,11 @@ if __name__ == "__main__":
         for g in genomes[:2]:
             record_vault_access(g.hash(), "smoke_test")
         record_vault_access(genomes[0].hash(), "smoke_test")   # not idempotent: 2 looks
+        _vs = vault_trial_sharpes()
         print("  vault       : %d distinct genomes have seen post-%s data "
-              "(3 accesses logged)" % (vault_trials(), config.VAULT_START))
+              "(3 accesses logged); G3 deflates at N=%d (== vault_trials: %s)"
+              % (vault_trials(), config.VAULT_START, len(_vs),
+                 len(_vs) == vault_trials()))
         with open(ledger_path()) as f:
             print("  header      : %s" % f.readline().strip())
     finally:

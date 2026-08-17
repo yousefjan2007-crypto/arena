@@ -37,7 +37,10 @@ FOUR THINGS DECIDED HERE, EACH WITH A REASON:
    The streaming walk-forward means nothing after `f` exists yet, so this is the
    only leak left to close — the label window itself. Every fit appends
    (fit_date, max_t1_used, n_rows) to `fit_audit` so verify.py can prove it from
-   the outside rather than take this docstring's word for it.
+   the outside rather than take this docstring's word for it. An episode may also
+   be handed a `fit_date_mask` (Phase 5's combinatorial purged CV, and nothing
+   else) which REMOVES further training dates on top of this rule; it can never
+   add one back.
 
 4. NO VAULT LOGIC LIVES HERE. The agent simulates whatever window it is handed;
    which days may be scored is evaluate.py's decision, not the simulator's.
@@ -135,6 +138,7 @@ class StrategyAgent:
         self.n = len(market.symbols)
         self.close = market.close
         self._model = None
+        self._fit_mask = None          # set per episode; see run_episode's fit_date_mask
 
         sig = genome.signal
         self.is_model = genome.is_model
@@ -228,6 +232,21 @@ class StrategyAgent:
                 random_state=self.cfg.SEED)
         return Pipeline(steps + [("clf", clf)])
 
+    def _trainable_dates(self, last: int, h: int) -> np.ndarray:
+        """Per-date mask over bars 0..last: may a row dated there be trained on?
+
+        None (the default episode) allows every date and this is all-True — the
+        purge in `_fit` is the only restriction. With a `fit_date_mask` (CPCV: the
+        test blocks and their embargo are False) a row is trainable only when BOTH
+        its own date AND its label's resolution date t1 = date + horizon fall on
+        mask-True days, so a training label can never overlap a test block.
+        """
+        if self._fit_mask is None:
+            return np.ones(last + 1, dtype=bool)
+        own = self._fit_mask[:last + 1]
+        t1 = self._fit_mask[h:h + last + 1]            # t1 <= last + h < len(dates)
+        return own & t1
+
     def _fit(self, f: int, fit_audit) -> bool:
         """Refit at bar f on resolved, embargoed labels only. False = not yet."""
         h = self.genome.signal.horizon
@@ -240,6 +259,7 @@ class StrategyAgent:
         y = y_mat[:last + 1].reshape(-1)
         labelled = np.isfinite(self._y[:last + 1]).reshape(-1)
         usable = labelled & np.isfinite(X).any(axis=1)
+        usable &= np.repeat(self._trainable_dates(last, h), self._X.shape[1])
         rows = np.flatnonzero(usable)
         if len(rows) < self.cfg.WF_MIN_TRAIN_DAYS:
             return False
@@ -257,7 +277,8 @@ class StrategyAgent:
                               "n_rows": int(len(rows)),
                               "family": self.genome.signal.family,
                               "horizon": h,
-                              "embargo_days": self.cfg.WF_EMBARGO_DAYS})
+                              "embargo_days": self.cfg.WF_EMBARGO_DAYS,
+                              "mask_active": self._fit_mask is not None})
         return True
 
     # ── scores ─────────────────────────────────────────────────────────────────
@@ -456,7 +477,8 @@ class StrategyAgent:
         self._extreme = np.where(live, self._extreme, np.nan)
 
     # ── the episode ────────────────────────────────────────────────────────────
-    def run_episode(self, env_start=None, env_end=None, decision_log=None, fit_audit=None):
+    def run_episode(self, env_start=None, env_end=None, decision_log=None, fit_audit=None,
+                    fit_date_mask=None):
         """Drive a MarketEnv from reset to done and return the daily series.
 
         Returns dates / daily_net / daily_gross / turnover / costs, each of length
@@ -473,7 +495,24 @@ class StrategyAgent:
         "rebalance" tag, because nothing about the overlay changed to cause them.
         To know whether a given trade happened under an overlay, replay the tags
         forward from the last transition — one flag per fill is not what is stored.
+
+        `fit_date_mask` is a boolean array over the MARKET's dates (evaluate.cpcv_paths
+        is its only caller). When given, refits may use only training rows whose own
+        date AND whose label resolution date fall on mask-True days, ON TOP OF the
+        purge and embargo above — that is what makes a combinatorial purged path
+        train on its six training blocks and nothing else. Default None leaves every
+        episode exactly as it was; it changes no F0/F1 result. Rule families never
+        fit, so a mask is inert for them (their paths measure sub-period consistency,
+        not a training/test split), and every fit-audit row records `mask_active` so
+        the difference is visible from the outside.
         """
+        if fit_date_mask is None:
+            self._fit_mask = None
+        else:
+            self._fit_mask = np.asarray(fit_date_mask, dtype=bool)
+            if self._fit_mask.shape != (len(self.market.dates),):
+                raise ValueError("fit_date_mask must cover the market's %d dates, got %s"
+                                 % (len(self.market.dates), self._fit_mask.shape))
         env = MarketEnv(self.market, self.cost, start=env_start, end=env_end,
                         rng=np.random.default_rng(self.cfg.SEED), decision_log=decision_log)
         obs = env.reset()
