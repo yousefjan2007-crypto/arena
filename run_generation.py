@@ -221,6 +221,12 @@ def load_f1_checkpoint(generation: int, ghash: str, identity, state_dir=None):
         return None
     for k in _F1_INTS:
         res[k] = int(res[k])
+    # npz has no None: strategy.py returns None for "this genome has no regime
+    # filter", which np.float64 stores as NaN. The fraction it otherwise holds is a
+    # mean of booleans and can never be NaN, so the mapping back is unambiguous —
+    # and a resumed result must mean exactly what a fresh one means.
+    if not np.isfinite(res["regime_finite_frac"]):
+        res["regime_finite_frac"] = None
     res["resumed"] = True
     return res
 
@@ -245,8 +251,8 @@ def _ledger_f0(generation: int, identity, state_dir=None) -> dict:
     out = {}
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
-            if (row["fidelity"] != "F0" or int(row["generation"]) != int(generation)
-                    or (row["data_hash"], row["panel_hash"], row["config_hash"]) != tuple(identity)):
+            same = (row["data_hash"], row["panel_hash"], row["config_hash"]) == tuple(identity)
+            if row["fidelity"] != "F0" or int(row["generation"]) != int(generation) or not same:
                 continue
             out[row["genome_hash"]] = {"score": float(row["score"]),
                                        "era_sharpes": None,
@@ -400,7 +406,15 @@ def run_generation(market, entries, generation: int, cost=None, n_jobs=1, evolve
     ranked = sorted(out["f0"], key=lambda row: (-row[1]["score"], row[0]["hash"]))
     keep = {row[0]["hash"] for row in ranked[:n_full]}
     keep |= {e["hash"] for e in entries if e["op"] == "elite"}
-    finalists = [row[0] for row in ranked if row[0]["hash"] in keep]
+    # One entry per HASH: evolution dedups the population it breeds, but a random
+    # seed draw can collide, and two slots holding the same genome must not buy two
+    # identical episodes (the ledger would keep one row and the second would be
+    # pure waste).
+    finalists, taken = [], set()
+    for row in ranked:
+        if row[0]["hash"] in keep and row[0]["hash"] not in taken:
+            finalists.append(row[0])
+            taken.add(row[0]["hash"])
 
     out["stage"] = "F1"
     if verbose:
@@ -533,14 +547,19 @@ def _print_summary(res: dict, market, entries, n_jobs: int, elapsed: float,
 
     if res["entries_next"] is not None:
         ops = evolution.op_counts(res["entries_next"])
-        print("  bred generation %-9d: %s -> %d distinct genomes carried into %s"
-              % (generation + 1, ", ".join("%s %d" % kv for kv in sorted(ops.items())),
+        print("  %-25s: %s -> %d distinct genomes carried into %s"
+              % ("bred generation %d" % (generation + 1),
+                 ", ".join("%s %d" % kv for kv in sorted(ops.items())),
                  len({e["hash"] for e in res["entries_next"]}), POPULATION_FILE))
+        # Against the parent population only — a mutant that coincides with a
+        # genome from five generations ago is new HERE, and the ledger is where
+        # "ever evaluated" is answered (n_trials above).
         fresh_hashes = {e["hash"] for e in res["entries_next"]} - {e["hash"] for e in entries}
-        print("  %-25s: %d of %d slots are genomes the arena has never evaluated"
+        print("  %-25s: %d of %d slots hold a genome the parent population did not"
               % ("search progress", len(fresh_hashes), len(res["entries_next"])))
     if res["hof"]:
-        print("  hall of fame (top %d)     : %d records, best:" % (config.HOF_SIZE, len(res["hof"])))
+        print("  %-25s: %d records, best:"
+              % ("hall of fame (top %d)" % config.HOF_SIZE, len(res["hof"])))
         for r in res["hof"][:3]:
             print("      %s %-13s SR %+.2f  gen %d  born gen %d via %s"
                   % (r["hash"], r["family"], r["sharpe_prevault"], r["generation"],

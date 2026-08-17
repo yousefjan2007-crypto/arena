@@ -187,9 +187,15 @@ def next_generation(pop_entries, scores, generation: int, feature_names) -> list
     n_elite, n_imm, n_off = slot_counts(len(entries))
     birth_gen = int(generation) + 1
 
-    ranked = _rank(entries, scores)
-    out = [dict(e, op="elite") for e in ranked[:n_elite]]
-    seen = {e["hash"] for e in out}
+    # Distinct hashes: a population that somehow holds one genome twice must not
+    # spend two elite slots carrying the same strategy into the next generation.
+    ranked, out, seen = _rank(entries, scores), [], set()
+    for e in ranked:
+        if len(out) >= n_elite:
+            break
+        if e["hash"] not in seen:
+            out.append(dict(e, op="elite"))
+            seen.add(e["hash"])
 
     for slot in range(n_off):
         # Two streams per slot, both derived from the slot's own coordinates: one
@@ -220,7 +226,8 @@ def next_generation(pop_entries, scores, generation: int, feature_names) -> list
             # Ten mutations could not escape: the neighbourhood is saturated. A
             # fresh immigrant is a slot spent on new information rather than on
             # re-evaluating a genome the population already has.
-            child, parent, op = _fresh(generation, "dedup", slot, seen, feature_names), "", "immigrant"
+            child = _fresh(generation, "dedup", slot, seen, feature_names)
+            op, parent = "immigrant", ""
 
         out.append(make_entry(child, op, parent, birth_gen))
         seen.add(child.hash())
