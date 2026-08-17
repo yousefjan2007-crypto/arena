@@ -36,6 +36,11 @@ jobs:
       - name: Install pinned dependencies
         run: pip install -r requirements.txt
 
+      - name: Verify before trading anything
+        # The same gate the other two workflows take, and the one that matters
+        # most here: this is the workflow that will one day place real orders.
+        run: python verify.py
+
       - name: Paper session (dry)
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
