@@ -186,12 +186,25 @@ BOOT_ITERS = 5000                   # block bootstrap resamples
 BOOT_BLOCK = 21                     # block length (~1 month) preserves autocorrelation
 
 # ── evolution ──────────────────────────────────────────────────────────────────
+# POP_SIZE is the size a population is SEEDED at (run_generation --init, whose
+# --pop overrides it). After that the population file carries its own size and
+# evolution.next_generation keeps it: a 12-genome arena stays 12 genomes, because
+# silently inflating a small run to 64 would multiply its cost by five between one
+# generation and the next.
 POP_SIZE = 64
 ELITE_N = 4
 IMMIGRANT_N = 4
 TOURNAMENT_K = 4
 SCREEN_FRAC = 0.5                   # fraction of the population surviving the F0 screen
 PARSIMONY_PENALTY = 0.01            # Sharpe penalty per feature (complexity tax)
+DEDUP_MAX_TRIES = 10                # re-mutations before a colliding child is replaced
+                                    # by a fresh immigrant (evolution.next_generation)
+HOF_SIZE = 10                       # hall-of-fame depth (top-N all-time by pre-vault Sharpe)
+# ELITE_N + IMMIGRANT_N are absolute counts sized for POP_SIZE=64 (8 slots of 64).
+# On a small run they would reserve the whole population — 4+4 of an 8-genome test
+# population breeds nothing at all — so evolution.slot_counts caps the two carried
+# groups at this fraction and scales them down proportionally. A no-op at POP_SIZE.
+EVOLVE_MAX_CARRY_FRAC = 0.5
 GEN_TIME_BUDGET_MIN = 180
 N_JOBS = 8                          # 8 on the Mac booster; the cloud runner sets 4
 
