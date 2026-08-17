@@ -125,12 +125,26 @@ def forget_cache() -> None:
 def record_trial(generation: int, genome, fidelity: str, score: float,
                  sharpe_prevault: float, n_days: int, data_hash: str,
                  panel_hash: str, parent_hash: str = "", birth_gen=None,
-                 state_dir=None) -> bool:
+                 state_dir=None, config_hash: str = None) -> bool:
     """Append one evaluation. True if written, False if it was already there.
 
     `sharpe_prevault` is the pre-vault net Sharpe for an F1/F2 row; for an F0 row
     it is the mean era Sharpe (the screen's own number) — trial_sr_std() only ever
     reads F1 rows, so the two never get mixed into one dispersion estimate.
+
+    FALSE IS NOT ALWAYS BENIGN, AND THE CALLER OWNS THE DIFFERENCE. Idempotency is
+    what makes a resumed or re-raced run harmless, but the key is only (hash,
+    generation, fidelity) — it does NOT include the identity columns. So a row
+    that was written under one data_hash blocks a row for the same genome and
+    generation computed under another, and the ledger keeps the older provenance
+    while the newer numbers are the ones in memory. Re-recording work that was
+    already recorded is fine; discarding a freshly computed evaluation is not, and
+    run_generation raises on exactly that case rather than letting the ledger's
+    identity columns quietly describe a different run than the one that happened.
+
+    `config_hash` defaults to the settings this process is running under. It is a
+    parameter only so an orphaned checkpoint can be ledgered under the settings it
+    was actually computed with (run_generation.sweep_orphan_checkpoints).
     """
     if fidelity not in FIDELITIES:
         raise ValueError("fidelity must be one of %s, got %r" % (FIDELITIES, fidelity))
@@ -144,7 +158,8 @@ def record_trial(generation: int, genome, fidelity: str, score: float,
     _append(path, LEDGER_COLUMNS, [
         int(generation), ghash, fidelity, sig.family, int(sig.horizon),
         len(sig.features), repr(float(score)), repr(float(sharpe_prevault)),
-        int(n_days), data_hash, panel_hash, config.config_hash(), platform_tag(),
+        int(n_days), data_hash, panel_hash,
+        config_hash or config.config_hash(), platform_tag(),
         parent_hash or "", "" if birth_gen is None else int(birth_gen)])
     _keys(path).add(key)
     return True
@@ -264,7 +279,7 @@ def vault_trials(state_dir=None) -> int:
 _MATRIX_KEYS = ("daily_net", "daily_gross", "turnover", "costs")
 
 
-def write_returns_matrix(generation: int, results, state_dir=None) -> str:
+def write_returns_matrix(generation: int, results, state_dir=None, identity=None) -> str:
     """Write state/returns/gen_<NNNN>.npz: four (days x genomes) float32 matrices.
 
     `results` maps genome_hash -> an evaluate.full_eval result (a dict, or any
@@ -279,8 +294,19 @@ def write_returns_matrix(generation: int, results, state_dir=None) -> str:
     pre-vault arrays under these keys; this is the second lock on the door,
     because this file is exactly what a PBO or DSR run would consume.
 
+    `identity` is (data_hash, panel_hash, config_hash) and is STORED IN THE FILE.
+    Without it the artifact is a matrix of numbers with no record of what produced
+    them: two runs of the same generation under different data would write
+    interchangeable-looking files, and a downstream reader (PBO, DSR, the gates)
+    could not tell that the matrix and the ledger rows it joins against describe
+    different worlds. Optional only so the Phase-3 smoke tests still call it.
+
     Write-once: an existing generation file is left alone and its path returned,
-    so a resumed run neither duplicates nor rewrites history.
+    so a resumed run neither duplicates nor rewrites history. WRITE-ONCE IS NOT A
+    MERGE — if the caller has computed a generation afresh under new inputs, the
+    file already on disk is the OLD one and returning it silently would hand back
+    an artifact that disagrees with the caller's own numbers. run_generation
+    checks for exactly that before calling here, and refuses.
     """
     path = returns_path(generation, state_dir)
     if os.path.exists(path):
@@ -308,18 +334,28 @@ def write_returns_matrix(generation: int, results, state_dir=None) -> str:
     tmp = path + ".tmp.npz"
     np.savez_compressed(tmp, generation=np.int64(generation),
                         dates=dates.values.astype("datetime64[ns]").astype(np.int64),
-                        hashes=np.array(hashes, dtype="U12"), **mats)
+                        hashes=np.array(hashes, dtype="U12"),
+                        identity=np.array(list(identity) if identity else ["", "", ""],
+                                          dtype="U32"), **mats)
     os.replace(tmp, path)                    # never leave a half-written artifact
     return path
 
 
 def load_returns_matrix(generation: int, state_dir=None) -> dict:
-    """Read back what write_returns_matrix wrote; dates come back as a DatetimeIndex."""
+    """Read back what write_returns_matrix wrote; dates come back as a DatetimeIndex.
+
+    `data_hash`/`panel_hash`/`config_hash` are empty strings for a matrix written
+    before the identity was stored. A consumer that joins this against the ledger
+    (gate G1's like-for-like check) must treat empty as "unknown provenance", not
+    as "matches".
+    """
     path = returns_path(generation, state_dir)
     with np.load(path, allow_pickle=False) as z:
+        ident = [str(v) for v in z["identity"]] if "identity" in z.files else ["", "", ""]
         out = {"generation": int(z["generation"]),
                "dates": pd.DatetimeIndex(z["dates"].astype("datetime64[ns]")),
-               "hashes": [str(h) for h in z["hashes"]]}
+               "hashes": [str(h) for h in z["hashes"]],
+               "data_hash": ident[0], "panel_hash": ident[1], "config_hash": ident[2]}
         for k in _MATRIX_KEYS:
             out[k] = z[k]
     return out

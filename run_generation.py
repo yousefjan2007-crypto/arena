@@ -63,6 +63,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import argparse                                                       # noqa: E402
 import csv                                                            # noqa: E402
+import glob                                                           # noqa: E402
 import json                                                           # noqa: E402
 import math                                                           # noqa: E402
 import shutil                                                         # noqa: E402
@@ -82,6 +83,29 @@ import ledger                                                         # noqa: E4
 from env import CostModel                                             # noqa: E402
 
 POPULATION_FILE = "population.json"
+
+
+class IdentityDrift(RuntimeError):
+    """The inputs moved under a generation that was already partly on disk.
+
+    Both of this run's persistence layers are deliberately write-once — the ledger
+    is idempotent on (genome hash, generation, fidelity) and the returns matrix
+    refuses to overwrite a generation — and both of those keys are BLIND TO
+    IDENTITY. That is exactly right for a resumed or re-raced run, where the work
+    being re-offered is the same work. It is exactly wrong when the data cache
+    refreshed between two runs of the same generation: everything gets re-simulated
+    under the new bars, breeding selects on the new scores, and then the new ledger
+    rows are dropped as duplicates while the old returns matrix is handed back as
+    though it were this run's. The population would then have been bred from
+    numbers that appear nowhere on disk, and nothing about the files would look
+    wrong.
+
+    So the run stops instead. The fix is a human decision, not a default: either
+    let the generation stand as it was evaluated (restore the data the row names)
+    or start the generation over under a new number. A dead run is cheap; a
+    provenance that lies is not, and this project's whole claim is that the ledger
+    says what actually happened.
+    """
 
 
 # ── data freshness (I/O boundary: the only place a wall clock is consulted) ────
@@ -172,7 +196,7 @@ def _tmp_path(generation: int, ghash: str, state_dir=None) -> str:
     return os.path.join(tmp_dir(generation, state_dir), "%s.npz" % ghash)
 
 
-def save_f1_checkpoint(generation: int, ghash: str, res: dict, identity, state_dir=None) -> str:
+def save_f1_checkpoint(generation: int, entry: dict, res: dict, identity, state_dir=None) -> str:
     """Persist one finished F1 episode, written by the worker that computed it.
 
     In the worker rather than the parent so that a run stopped by the time budget
@@ -183,7 +207,15 @@ def save_f1_checkpoint(generation: int, ghash: str, res: dict, identity, state_d
     `identity` is (data_hash, panel_hash, config_hash): a checkpoint is only
     reusable if the market, the panel and the settings are the ones it was
     computed under, so it is stored alongside and checked on the way back in.
+
+    THE WHOLE POPULATION ENTRY IS STORED, not just the hash. A checkpoint is
+    evidence that an evaluation HAPPENED, and an evaluation that happened has to
+    be able to reach the trial ledger even if the run that computed it never got
+    that far and its population.json was overwritten in the meantime —
+    sweep_orphan_checkpoints is what does that, and it needs the genome body, the
+    lineage and the identity the episode was computed under.
     """
+    ghash = entry["hash"]
     path = _tmp_path(generation, ghash, state_dir)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {k: np.asarray(res[k], dtype=np.float64) for k in _F1_ARRAYS}
@@ -192,6 +224,7 @@ def save_f1_checkpoint(generation: int, ghash: str, res: dict, identity, state_d
     for k in _F1_SCALARS:
         payload[k] = np.float64(res[k])
     payload["identity"] = np.array(list(identity) + [ghash], dtype="U32")
+    payload["entry"] = np.array(json.dumps(entry, sort_keys=True))
     tmp = path + ".tmp.npz"
     np.savez_compressed(tmp, **payload)
     os.replace(tmp, path)                    # never leave a half-written checkpoint
@@ -205,6 +238,15 @@ def load_f1_checkpoint(generation: int, ghash: str, identity, state_dir=None):
     same thing to the caller: simulate it again. A killed run can leave a
     truncated file, and the identity check catches a checkpoint written before the
     data, the panel or a config knob moved.
+
+    PHASE 5, READ THIS BEFORE TRUSTING A RESUMED RESULT. What comes back is
+    _F1_ARRAYS + _F1_SCALARS and nothing else: there is no `fit_audit` (so the
+    streaming-purge evidence for that episode is not here — verify test 5's
+    invariant cannot be re-checked from a checkpoint) and no `vault_daily_net`
+    (deliberately never written under state/ by an evaluation path). A gate that
+    needs either — G3's vault confirmation, any fit-time audit — must RE-SIMULATE
+    the genome rather than read this dict, which is what gate G1's "incumbent
+    re-simulated fresh" rule already requires for its own reasons.
     """
     path = _tmp_path(generation, ghash, state_dir)
     if not os.path.exists(path):
@@ -229,6 +271,122 @@ def load_f1_checkpoint(generation: int, ghash: str, identity, state_dir=None):
         res["regime_finite_frac"] = None
     res["resumed"] = True
     return res
+
+
+def sweep_orphan_checkpoints(generation: int, state_dir=None, verbose=True) -> dict:
+    """Ledger every checkpointed F1 episode that never made it onto the ledger.
+
+    AN EVALUATION THAT HAPPENED HAS TO COUNT. n_trials() is the N that deflates
+    every Sharpe this project reports, and it is the count of genomes the search
+    LOOKED at — so an episode that was simulated, checkpointed, and then orphaned
+    (the run died before appending; the next run was `--init`; the population file
+    moved on) is a trial the ledger is missing. Dropping it does not just lose a
+    record, it makes DSR optimistic, which is the one direction this project is
+    not allowed to be wrong in.
+
+    Orphans are ledgered under THEIR OWN recorded identity — the data, panel and
+    config hashes stored in the checkpoint, not this run's — because that is what
+    the episode was actually computed under, and a row claiming otherwise would be
+    exactly the provenance lie IdentityDrift exists to prevent.
+
+    A directory for a generation the arena has already passed can never be
+    resumed (the counter only moves forward), so it is removed once swept.
+    """
+    root = state_dir or config.STATE_DIR
+    stat = {"appended": 0, "already": 0, "unreadable": 0, "removed": 0}
+    for d in sorted(glob.glob(os.path.join(root, "tmp_gen_*"))):
+        try:
+            gen = int(os.path.basename(d).rsplit("_", 1)[-1])
+        except ValueError:
+            continue
+        for path in sorted(glob.glob(os.path.join(d, "*.npz"))):
+            try:
+                with np.load(path, allow_pickle=False) as z:
+                    entry = json.loads(str(z["entry"]))
+                    ident = [str(v) for v in z["identity"]]
+                    score = float(z["score"])
+                    sharpe = float(z["sharpe_prevault"])
+                    n_days = int(float(z["n_days_prevault"]))
+            except Exception:
+                # Truncated, or written before the entry was stored. Either way it
+                # cannot be turned into an honest row; it is still usable as a
+                # resume checkpoint, so it is left alone rather than deleted.
+                stat["unreadable"] += 1
+                continue
+            if _ledger_row(gen, entry["hash"], "F1", state_dir) is not None:
+                stat["already"] += 1
+                continue
+            ledger.record_trial(gen, evolution.entry_genome(entry), "F1", score, sharpe,
+                                n_days, ident[0], ident[1],
+                                parent_hash=evolution.parent_field(entry["parent_hash"]),
+                                birth_gen=entry["birth_gen"], state_dir=state_dir,
+                                config_hash=ident[2])
+            stat["appended"] += 1
+            if verbose:
+                print("  orphan    : ledgered %s (generation %d, F1, SR %+.2f) from a "
+                      "checkpoint no run ever recorded" % (entry["hash"], gen, sharpe))
+        if gen < int(generation):
+            shutil.rmtree(d, ignore_errors=True)
+            stat["removed"] += 1
+    if verbose and stat["removed"]:
+        print("  orphan    : removed %d checkpoint dir(s) for generations already "
+              "passed" % stat["removed"])
+    return stat
+
+
+def _ledger_row(generation: int, ghash: str, fidelity: str, state_dir=None):
+    """The ledger row for one (genome, generation, fidelity), or None."""
+    path = ledger.ledger_path(state_dir)
+    if not os.path.exists(path):
+        return None
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            if (row["genome_hash"] == ghash and row["fidelity"] == fidelity
+                    and int(row["generation"]) == int(generation)):
+                return row
+    return None
+
+
+def _row_identity(row) -> tuple:
+    return (row["data_hash"], row["panel_hash"], row["config_hash"])
+
+
+def _append_trial(generation: int, entry, res, fidelity: str, sharpe, n_days,
+                  identity, state_dir=None) -> bool:
+    """Append one evaluation, and refuse to let a duplicate key swallow new work.
+
+    record_trial returning False means "already on record", which is the whole
+    point of a resumable, re-raceable job — but its key does not include the
+    identity columns. A False for a result THIS RUN COMPUTED, against a row
+    written under different inputs, is the one case where idempotency is silently
+    destructive: the numbers in memory are what breeding is about to select on,
+    and the row on disk describes a different market. See IdentityDrift.
+    """
+    wrote = ledger.record_trial(generation, evolution.entry_genome(entry), fidelity,
+                                res["score"], sharpe, n_days, identity[0], identity[1],
+                                parent_hash=evolution.parent_field(entry["parent_hash"]),
+                                birth_gen=entry["birth_gen"], state_dir=state_dir)
+    if wrote or res.get("resumed"):
+        return wrote
+    prior = _ledger_row(generation, entry["hash"], fidelity, state_dir)
+    if prior is not None and _row_identity(prior) == tuple(identity):
+        # Same genome, same generation, same inputs: this run re-simulated work
+        # that was already recorded (checkpoints removed by hand, say). The row
+        # on disk says what this run would have written, so keeping it is honest.
+        return False
+    raise IdentityDrift(
+        "generation %d already has a %s row for %s, recorded under different "
+        "inputs than this run computed it with:\n"
+        "    on disk : data %s | panel %s | config %s\n"
+        "    this run: data %s | panel %s | config %s\n"
+        "The ledger is idempotent on (genome, generation, fidelity) and would "
+        "have dropped the row this run just produced, while the population was "
+        "bred from it. Either restore the inputs the row names, or evaluate this "
+        "population as a new generation."
+        % ((generation, fidelity, entry["hash"])
+           + (_row_identity(prior) if prior is not None
+              else ("?", "?", "? (no row found — the ledger changed mid-run)"))
+           + tuple(identity)))
 
 
 def _ledger_f0(generation: int, identity, state_dir=None) -> dict:
@@ -273,7 +431,7 @@ def _full_one(entry, market, cost, generation, identity, state_dir):
     t0 = time.time()                                           # io-boundary
     res = evaluate.full_eval(evolution.entry_genome(entry), market, cost)
     res["n_fits"] = len(res["fit_audit"])
-    save_f1_checkpoint(generation, entry["hash"], res, identity, state_dir)
+    save_f1_checkpoint(generation, entry, res, identity, state_dir)
     return entry["hash"], res, time.time() - t0                # io-boundary
 
 
@@ -351,7 +509,12 @@ def run_generation(market, entries, generation: int, cost=None, n_jobs=1, evolve
     identity = (market.data_hash, market.panel_hash, config.config_hash())
     out = {"generation": generation, "complete": False, "stage": "F0",
            "f0": [], "f1": [], "npz": None, "entries_next": None, "hof": None,
-           "scores": {}, "f0_secs": 0.0, "f1_secs": 0.0, "resumed_f0": 0, "resumed_f1": 0}
+           "scores": {}, "f0_secs": 0.0, "f1_secs": 0.0, "resumed_f0": 0,
+           "resumed_f1": 0, "orphans": {}}
+
+    # Before anything else: an evaluation that happened but was never recorded
+    # would undercount n_trials and make every DSR in the project optimistic.
+    out["orphans"] = sweep_orphan_checkpoints(generation, state_dir, verbose)
 
     # ── F0: screen everything on three pre-vault eras ─────────────────────────
     timing: dict = {}                  # hash -> seconds THIS run spent on it
@@ -373,11 +536,9 @@ def run_generation(market, entries, generation: int, cost=None, n_jobs=1, evolve
                       % (start[:7], end[:7], len(sub.symbols), sub.panel_hash))
 
         def _record_f0(entry, res):
-            ledger.record_trial(generation, evolution.entry_genome(entry), "F0", res["score"],
-                                float(np.mean(res["era_sharpes"])), res["n_days"],
-                                identity[0], identity[1],
-                                parent_hash=evolution.parent_field(entry["parent_hash"]),
-                                birth_gen=entry["birth_gen"], state_dir=state_dir)
+            _append_trial(generation, entry, res, "F0",
+                          float(np.mean(res["era_sharpes"])), res["n_days"],
+                          identity, state_dir)
 
         fresh, exhausted = _run_stage(_screen_one, todo, (eras, cost), n_jobs, "F0",
                                       deadline, _record_f0, verbose)
@@ -437,11 +598,8 @@ def run_generation(market, entries, generation: int, cost=None, n_jobs=1, evolve
                                             state_dir or config.STATE_DIR)))
 
     def _record_f1(entry, res):
-        ledger.record_trial(generation, evolution.entry_genome(entry), "F1", res["score"],
-                            res["sharpe_prevault"], res["n_days_prevault"],
-                            identity[0], identity[1],
-                            parent_hash=evolution.parent_field(entry["parent_hash"]),
-                            birth_gen=entry["birth_gen"], state_dir=state_dir)
+        _append_trial(generation, entry, res, "F1", res["sharpe_prevault"],
+                      res["n_days_prevault"], identity, state_dir)
 
     t1 = time.time()                                           # io-boundary
     fresh, exhausted = _run_stage(_full_one, todo, (market, cost, generation, identity,
@@ -465,8 +623,32 @@ def run_generation(market, entries, generation: int, cost=None, n_jobs=1, evolve
     # ── the generation is complete: artifact, then breed ──────────────────────
     out["complete"] = True
     out["stage"] = "done"
+    # write_returns_matrix is write-once, which is what makes a resumed run safe
+    # and what makes a re-run under CHANGED inputs dangerous: it would hand back
+    # the old generation's matrix while this run's freshly simulated returns —
+    # the ones breeding is about to select on — went nowhere. Only a matrix whose
+    # stored identity matches may be reused, and only if this run had nothing new
+    # to contribute to it.
+    npz_path = ledger.returns_path(generation, state_dir)
+    if fresh and os.path.exists(npz_path):
+        prior = ledger.load_returns_matrix(generation, state_dir)
+        prior_id = (prior["data_hash"], prior["panel_hash"], prior["config_hash"])
+        if prior_id != tuple(identity):
+            raise IdentityDrift(
+                "generation %d already has %s, and this run simulated %d episode(s) "
+                "afresh under different inputs:\n"
+                "    on disk : data %s | panel %s | config %s\n"
+                "    this run: data %s | panel %s | config %s\n"
+                "The artifact is write-once, so the file that would be handed to "
+                "PBO and DSR is the old one while the population was bred from the "
+                "new numbers. Either restore the inputs the artifact names, or "
+                "evaluate this population as a new generation."
+                % ((generation, os.path.basename(npz_path), len(fresh))
+                   + tuple("(unrecorded)" if not v else v for v in prior_id)
+                   + tuple(identity)))
     out["npz"] = ledger.write_returns_matrix(
-        generation, {e["hash"]: done[e["hash"]] for e in finalists}, state_dir=state_dir)
+        generation, {e["hash"]: done[e["hash"]] for e in finalists},
+        state_dir=state_dir, identity=identity)
 
     # Selection score: F1 where the genome earned one, the screen's number where it
     # did not (evolution.next_generation documents what that mixes).
@@ -635,8 +817,18 @@ def main() -> int:
     print("  budget    : %.0f min from now, checked between genome evaluations"
           % args.budget_min)
 
-    res = run_generation(market, entries, generation, cost=CostModel(), n_jobs=n_jobs,
-                         evolve=not args.no_evolve, deadline=deadline, verbose=True)
+    try:
+        res = run_generation(market, entries, generation, cost=CostModel(), n_jobs=n_jobs,
+                             evolve=not args.no_evolve, deadline=deadline, verbose=True)
+    except IdentityDrift as exc:
+        # Exit 1, loudly. A scheduled job that fails is visible; a scheduled job
+        # that quietly writes a ledger describing a different run than the one it
+        # bred from is not, and this project's entire claim is that the ledger
+        # says what happened.
+        print("\n  ABORT: inputs changed under an evaluated generation\n")
+        for line in str(exc).splitlines():
+            print("  %s" % line)
+        return 1
 
     elapsed = (time.time() - t_start) / 60.0                   # io-boundary
     if not res["complete"]:

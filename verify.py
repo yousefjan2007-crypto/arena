@@ -436,6 +436,7 @@ def test_planted_leak():
 DET_DAYS = 760                                   # 2000-01-03 .. 2002-11
 DET_POP = 8
 DET_GENS = 2
+DET_MAX_RUNS = 60                                # bound on the one-genome-per-run leg
 DET_CONFIG = {
     "SCREEN_ERAS": [("2000-11-01", "2001-04-30"),
                     ("2001-05-01", "2001-10-31"),
@@ -509,6 +510,43 @@ def _pair_run(market, state_dir: str) -> dict:
         ledger.forget_cache()
 
 
+def _chunked_run(market, state_dir: str) -> dict:
+    """The same two generations, evaluated one genome per run.
+
+    `deadline=0.0` is an instant in 1970, so the budget is spent the moment the
+    first genome of a stage lands and every run stops after exactly one
+    evaluation, checkpoints it and exits incomplete. Re-running to completion
+    therefore crosses every resume boundary there is: mid-F0, the F0 -> F1
+    handover, and mid-F1. A wall clock would make this test time-dependent; a
+    deadline in the past makes it a pure function.
+    """
+    ledger.forget_cache()
+    saved = config.STATE_DIR
+    config.STATE_DIR = state_dir
+    try:
+        entries = run_generation.seed_population(DET_POP, market.feature_names, generation=0)
+        run_generation.save_population(entries, 0, state_dir=state_dir)
+        pops, runs, stops = [], 0, 0
+        for _ in range(DET_GENS):
+            while True:
+                runs += 1
+                if runs > DET_MAX_RUNS:
+                    raise AssertionError("chunked run did not converge in %d runs"
+                                         % DET_MAX_RUNS)
+                entries, generation = run_generation.load_population(state_dir=state_dir)
+                res = run_generation.run_generation(
+                    market, entries, generation, cost=CostModel(), n_jobs=1, evolve=True,
+                    deadline=0.0, state_dir=state_dir, verbose=False)
+                if res["complete"]:
+                    pops.append([e["hash"] for e in res["entries_next"]])
+                    break
+                stops += 1
+        return {"pops": pops, "runs": runs, "stops": stops}
+    finally:
+        config.STATE_DIR = saved
+        ledger.forget_cache()
+
+
 def _read(path: str) -> bytes:
     with open(path, "rb") as f:
         return f.read()
@@ -527,7 +565,7 @@ def test_determinism():
     """
     print("\n2. Determinism (two generations, run twice, compared byte for byte)")
     saved_cfg = {k: getattr(config, k) for k in DET_CONFIG}
-    dirs = [tempfile.mkdtemp(prefix="arena_verify_det%d_" % i) for i in (1, 2)]
+    dirs = [tempfile.mkdtemp(prefix="arena_verify_det%d_" % i) for i in (1, 2, 3)]
     try:
         for k, v in DET_CONFIG.items():
             setattr(config, k, v)
@@ -561,13 +599,13 @@ def test_determinism():
                            ", ".join("%.1f kB" % (os.path.getsize(os.path.join(dirs[0], n))
                                                   / 1024.0) for n in npz)))
 
-        led = [_read(os.path.join(d, "trial_ledger.csv")) for d in dirs]
+        led = [_read(os.path.join(d, "trial_ledger.csv")) for d in dirs[:2]]
         rows = led[0].decode().strip().splitlines()
         check("byte-identical trial ledger (every column)", led[0] == led[1],
               "%d rows incl. header, %d bytes; platform %s"
               % (len(rows), len(led[0]), ledger.platform_tag()))
 
-        hof = [_read(os.path.join(d, evolution.HOF_FILE)) for d in dirs]
+        hof = [_read(os.path.join(d, evolution.HOF_FILE)) for d in dirs[:2]]
         check("byte-identical hall of fame", hof[0] == hof[1] and bool(a["hof"]),
               "%d records, best %s SR %+.4f"
               % (len(a["hof"]), a["hof"][0]["hash"], a["hof"][0]["sharpe_prevault"]))
@@ -577,6 +615,35 @@ def test_determinism():
         moved = sum(1 for x, y in zip(a["pops"][0], a["pops"][1]) if x != y)
         check("the population actually moved between generations", moved > 0,
               "%d of %d slots differ between generation 1 and 2" % (moved, DET_POP))
+
+        # The artifact has to say what produced it, or a matrix written under one
+        # market is indistinguishable from one written under another.
+        mat = ledger.load_returns_matrix(0, dirs[0])
+        check("returns artifact carries its own identity",
+              (mat["data_hash"], mat["panel_hash"], mat["config_hash"])
+              == (market.data_hash, market.panel_hash, config.config_hash()),
+              "data %s | panel %s | config %s stored in gen_0000.npz"
+              % (mat["data_hash"], mat["panel_hash"], mat["config_hash"]))
+
+        # ── the interrupted leg ───────────────────────────────────────────────
+        # Same two generations, but every run is stopped by the time budget after
+        # one genome and resumed. Determinism has to survive being cut in half:
+        # the checkpoints, the ledger-resumed F0 scores and the fresh episodes
+        # must reassemble into the same generation, byte for byte, as the run that
+        # was never interrupted.
+        c = _chunked_run(market, dirs[2])
+        check("a run stopped by the budget resumes to the same population",
+              c["pops"] == a["pops"],
+              "%d runs, %d of them stopped mid-generation, to reach the same %d "
+              "generations" % (c["runs"], c["stops"], DET_GENS))
+        for name in [n for n in npz] + ["trial_ledger.csv", evolution.HOF_FILE,
+                                        run_generation.POPULATION_FILE]:
+            check("resumed == uninterrupted: %s" % name,
+                  _read(os.path.join(dirs[0], name)) == _read(os.path.join(dirs[2], name)),
+                  "%d bytes" % os.path.getsize(os.path.join(dirs[2], name)))
+        check("no checkpoint directory survives a completed generation",
+              not glob.glob(os.path.join(dirs[2], "tmp_gen_*")),
+              "state/tmp_gen_* removed once the population advanced")
     finally:
         for k, v in saved_cfg.items():
             setattr(config, k, v)
