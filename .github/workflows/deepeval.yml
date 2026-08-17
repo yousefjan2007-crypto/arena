@@ -64,8 +64,15 @@ jobs:
           GEN=$(python -c "import json;print(json.load(open('state/population.json'))['generation'])" 2>/dev/null || echo "?")
           git commit -q -m "arena: deep eval at gen ${GEN} [skip ci]" \
             -m "Runner decision from ${GITHUB_RUN_ID} (${GITHUB_EVENT_NAME}). Promotion or refusal, its gate report, and the week's report."
+          # actions/checkout leaves a SHALLOW clone (depth 1), which is the right
+          # trade for a repo carrying ~78 MB of price CSVs — but a shallow repo
+          # cannot rebase onto a tip it has no ancestor for, so deepen first and
+          # fall back to a plain fetch when there is nothing left to deepen.
           for i in 1 2 3; do
-            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+            git fetch --deepen=50 origin "${GITHUB_REF_NAME}" \
+              || git fetch origin "${GITHUB_REF_NAME}" || true
+            git rebase "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
               echo "pushed on attempt ${i}"
               exit 0
             fi
