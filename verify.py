@@ -12,6 +12,11 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here:
                          collapse from IC 0.40 to IC 0.03. See test_planted_leak's
                          docstring: the two are different failures and conflating
                          them is how a project ends up trusting the wrong defense.
+  2. Determinism         two full generations (F0 + F1 + breed) of an 8-genome
+                         population, run twice into two state directories on a
+                         synthetic market: identical population hashes each
+                         generation, byte-identical returns .npz artifacts,
+                         byte-identical trial ledgers and hall of fame.
   3. Accounting fuzz     500 seeded random-target steps: the equity identity
                          holds, limits hold post-fill, shares stay integral,
                          costs stay non-negative, and the equity path replays
@@ -42,7 +47,7 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here:
                          backtest overfitting; plant one genuinely persistent
                          column and it reports a low one, having found it.
 
-Still to come: 2 determinism (Phase 4), 7 gates (Phase 5).
+Still to come: 7 gates (Phase 5).
 
 Everything here runs on a synthetic, seeded market. verify.py NEVER touches the
 network or the cache: the test suite must give the same answer on a plane, on a
@@ -62,8 +67,11 @@ import pandas as pd
 import config                       # FIRST: puts the siblings on sys.path
 import datafeed
 import evaluate
+import evolution
+import features as arena_features
 import genome as gn
 import ledger
+import run_generation
 from env import CostModel, MarketEnv
 from strategy import StrategyAgent
 from strategy import sharpe as report_sharpe      # NaN on degenerate input, unlike
@@ -152,6 +160,11 @@ def attach_features(market, panel: dict) -> None:
         arr.setflags(write=False)
         market.features[name] = arr
     market.feature_names = tuple(sorted(panel))
+    # The panel identity every ledger row and every checkpoint is keyed on. Test
+    # panels get a real one for the same reason production ones do: two results are
+    # comparable only if they were computed on the same inputs.
+    market.panel_hash = arena_features.panel_hash(market.data_hash, market.feature_names,
+                                                  market.features)
 
 
 def _benign(market) -> dict:
@@ -414,9 +427,166 @@ def test_planted_leak():
                                 np.abs(tstat2).max(), trials[0]["n"], np.abs(gross2).max()))
 
 
+# ── 2. determinism ─────────────────────────────────────────────────────────────
+# A short synthetic history: the eras and the vault below are chosen to fit inside
+# it, and WF_MIN_TRAIN_DAYS is shortened so the model families can actually reach
+# their first fit. The arena's real settings assume 30 years; asking for them here
+# would mean a 30-year synthetic market and a test nobody runs. What is under test
+# is reproducibility, and that is scale-free.
+DET_DAYS = 760                                   # 2000-01-03 .. 2002-11
+DET_POP = 8
+DET_GENS = 2
+DET_CONFIG = {
+    "SCREEN_ERAS": [("2000-11-01", "2001-04-30"),
+                    ("2001-05-01", "2001-10-31"),
+                    ("2001-11-01", "2002-04-30")],
+    "VAULT_START": "2002-07-01",
+    "WF_MIN_TRAIN_DAYS": 80,
+}
+
+
+def determinism_market():
+    """A 10-symbol synthetic market with a panel rich enough that EVERY genome
+    BOUNDS can draw is runnable: the benchmark symbol (spy_200dma needs it), a
+    `vix_pct` column (vix_pct_80 needs it), and the seasonal column (seasonal_rule
+    scores on it directly). Otherwise a random population would raise the moment
+    the draw picked one of those genes, and the test would be measuring which
+    genomes happened to be legal.
+
+    Every column is backward-looking — rolling or shifted, never centred — because
+    a leak here would not fail this test (both runs would leak identically) but
+    would quietly make the numbers it prints meaningless.
+    """
+    market = synthetic_market(n_days=DET_DAYS, n_syms=10, seed=config.SEED)
+    market.symbols[0] = config.BENCHMARK
+    panel = _benign(market)
+    close = pd.DataFrame(market.close)
+    # A per-date "fear" level: trailing percentile rank of cross-sectional realised
+    # vol, broadcast to every symbol the way features.py broadcasts a macro series.
+    rv = np.log(close).diff().std(axis=1).rolling(21).mean()
+    vix = rv.rolling(252, min_periods=21).rank(pct=True)
+    panel["vix_pct"] = np.repeat(vix.to_numpy()[:, None], len(market.symbols), axis=1)
+    # A seasonal score: the month-of-year mean return computed on PRIOR years only
+    # (expanding, shifted), which is what signal_lab's _expanding_seasonal does and
+    # why the panel's seasonal column is not a whole-sample statistic.
+    ret = close.pct_change()
+    month = pd.Series(market.dates.month, index=ret.index)
+    seasonal = np.full(ret.shape, np.nan)
+    for m in range(1, 13):
+        rows = np.flatnonzero(month.to_numpy() == m)
+        if len(rows) < 2:
+            continue
+        prior = ret.iloc[rows].expanding().mean().shift(1).to_numpy()
+        seasonal[rows] = prior
+    panel[arena_features.SEASONAL_COL] = seasonal
+    attach_features(market, panel)
+    return market
+
+
+def _pair_run(market, state_dir: str) -> dict:
+    """Seed a population and run DET_GENS complete generations into `state_dir`."""
+    ledger.forget_cache()
+    saved = config.STATE_DIR
+    config.STATE_DIR = state_dir              # panel/artifact paths, for anything
+    try:                                      # that resolves them lazily
+        entries = run_generation.seed_population(DET_POP, market.feature_names, generation=0)
+        run_generation.save_population(entries, 0, state_dir=state_dir)
+        pops, best = [], []
+        for _ in range(DET_GENS):
+            entries, generation = run_generation.load_population(state_dir=state_dir)
+            res = run_generation.run_generation(
+                market, entries, generation, cost=CostModel(), n_jobs=1, evolve=True,
+                deadline=None, state_dir=state_dir, verbose=False)
+            if not res["complete"]:
+                raise AssertionError("generation %d did not complete" % generation)
+            pops.append([e["hash"] for e in res["entries_next"]])
+            best.append(max(r["sharpe_prevault"] for _e, r, _s in res["f1"]))
+        return {"pops": pops, "best": best,
+                "ops": evolution.op_counts(res["entries_next"]),
+                "n_trials": ledger.n_trials(state_dir), "hof": res["hof"]}
+    finally:
+        config.STATE_DIR = saved
+        ledger.forget_cache()
+
+
+def _read(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def test_determinism():
+    """DESIGN check 2. The claim the whole project rests on: a generation is a
+    pure function of (SEED, generation, population, data), so any two runs of the
+    same generation produce the same genomes, the same simulated returns and the
+    same ledger — on this platform (BLAS differences across architectures can flip
+    low-order bits, which is why ledger rows are platform-tagged).
+
+    It is proved by BYTES, not by tolerances. A tolerance-based comparison would
+    pass while a shared mutable rng silently reordered the search, which is the
+    exact failure evolution.py's per-slot streams exist to prevent.
+    """
+    print("\n2. Determinism (two generations, run twice, compared byte for byte)")
+    saved_cfg = {k: getattr(config, k) for k in DET_CONFIG}
+    dirs = [tempfile.mkdtemp(prefix="arena_verify_det%d_" % i) for i in (1, 2)]
+    try:
+        for k, v in DET_CONFIG.items():
+            setattr(config, k, v)
+        market = determinism_market()
+        a = _pair_run(market, dirs[0])
+        b = _pair_run(market, dirs[1])
+
+        # The run has to have DONE something, or every equality below is vacuous.
+        check("the pair-run actually ran a search",
+              a["n_trials"] >= DET_POP + 1 and len(a["pops"]) == DET_GENS
+              and sum(a["ops"].get(op, 0) for op in ("mutate", "crossover")) > 0,
+              "%d distinct genomes ledgered over %d generations of %d; generation %d "
+              "was bred %s" % (a["n_trials"], DET_GENS, DET_POP, DET_GENS,
+                               ", ".join("%s %d" % kv for kv in sorted(a["ops"].items()))))
+
+        same_pops = a["pops"] == b["pops"]
+        check("identical population hashes after every generation", same_pops,
+              "gen %s" % " | ".join("%d: %s..." % (i + 1, ",".join(h[:6] for h in p[:3]))
+                                    for i, p in enumerate(a["pops"])))
+        check("identical best pre-vault Sharpe per generation",
+              all(x == y for x, y in zip(a["best"], b["best"])),
+              "best F1 SR by generation: %s"
+              % ", ".join("%+.6f" % s for s in a["best"]))
+
+        npz = ["returns/gen_%04d.npz" % g for g in range(DET_GENS)]
+        diffs = [n for n in npz
+                 if _read(os.path.join(dirs[0], n)) != _read(os.path.join(dirs[1], n))]
+        check("byte-identical returns artifacts", not diffs,
+              "%s differ" % ", ".join(diffs) if diffs else
+              "%s (%s)" % (", ".join(npz),
+                           ", ".join("%.1f kB" % (os.path.getsize(os.path.join(dirs[0], n))
+                                                  / 1024.0) for n in npz)))
+
+        led = [_read(os.path.join(d, "trial_ledger.csv")) for d in dirs]
+        rows = led[0].decode().strip().splitlines()
+        check("byte-identical trial ledger (every column)", led[0] == led[1],
+              "%d rows incl. header, %d bytes; platform %s"
+              % (len(rows), len(led[0]), ledger.platform_tag()))
+
+        hof = [_read(os.path.join(d, evolution.HOF_FILE)) for d in dirs]
+        check("byte-identical hall of fame", hof[0] == hof[1] and bool(a["hof"]),
+              "%d records, best %s SR %+.4f"
+              % (len(a["hof"]), a["hof"][0]["hash"], a["hof"][0]["sharpe_prevault"]))
+
+        # Determinism must not be the trivial kind: if evolution never changed the
+        # population, two identical runs would prove nothing about the operators.
+        moved = sum(1 for x, y in zip(a["pops"][0], a["pops"][1]) if x != y)
+        check("the population actually moved between generations", moved > 0,
+              "%d of %d slots differ between generation 1 and 2" % (moved, DET_POP))
+    finally:
+        for k, v in saved_cfg.items():
+            setattr(config, k, v)
+        for d in dirs:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 # ── 3. accounting fuzz ─────────────────────────────────────────────────────────
 def test_accounting():
-    print("3. Accounting fuzz (500 seeded random-target steps)")
+    print("\n3. Accounting fuzz (500 seeded random-target steps)")
     market = synthetic_market()
     rng = np.random.default_rng(config.SEED)
     log: list = []
@@ -1056,6 +1226,7 @@ def test_pbo_sanity():
 
 def main() -> int:
     test_planted_leak()
+    test_determinism()
     test_accounting()
     test_fill_timing()
     test_streaming_purge()
