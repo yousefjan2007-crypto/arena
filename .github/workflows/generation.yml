@@ -1,0 +1,118 @@
+name: generation
+
+# The nightly (twice-daily) search. docs/DESIGN.md "Scheduling & reporting":
+# twice a day, 7 days a week, up to ~4h/session on the 4-vCPU runner. That is the
+# honest reading of "as often as possible" — the data changes once per trading
+# day, so beyond ~2 generations/day extra runs mostly inflate the trial count,
+# which DEFLATES every deflated Sharpe, without exploring meaningfully more.
+# Weekend runs are pure search on static data.
+on:
+  schedule:
+    - cron: "30 2 * * *"          # 02:30 UTC
+    - cron: "30 14 * * *"         # 14:30 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write                 # the repo IS the state; every run commits back
+
+# SHARED with deepeval.yml on purpose. Both jobs append to state/ and push, so
+# they must never overlap — not because a lost race would corrupt anything (the
+# ledger is idempotent on genome+generation+fidelity) but because a rejected push
+# wastes hours of runner time. cancel-in-progress is false: a cancelled generation
+# would throw away work that was still checkpointing.
+concurrency:
+  group: arena-state
+  cancel-in-progress: false
+
+jobs:
+  generation:
+    runs-on: ubuntu-latest
+    # The GitHub job ceiling is 6h. 350 min leaves the commit-back step room to
+    # run even if the arena itself uses its whole budget.
+    timeout-minutes: 350
+    env:
+      # The runner has 4 vCPUs and finite sessions; this Mac has 14 cores and
+      # neither. Both knobs are in config._CONFIG_HASH_SKIP, so overriding them
+      # cannot change a single result's identity — that is why they, and only
+      # they, are environment-tunable.
+      ARENA_N_JOBS: "4"
+      GEN_TIME_BUDGET_MIN: "300"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify before evaluating
+        # docs/DESIGN.md: verify.py is "the gate for scheduling anything". It runs
+        # entirely on a synthetic seeded market — no cache, no network — so it is
+        # cheap here and it catches a broken checkout before hours are spent on it.
+        run: python verify.py
+
+      - name: Run one generation
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        # --refresh is the ONE network step, and it skips itself when the
+        # generation is already mid-flight (new bars under half-evaluated work
+        # would orphan every checkpoint — run_generation.generation_in_flight).
+        run: python run_generation.py --refresh --send
+
+      - name: Prune old returns matrices
+        # docs/DESIGN.md "Repo growth policy": the permanent record is the trial
+        # ledger + hall of fame + champion artifacts; the per-generation returns
+        # .npz feeds the cohort PBO of a recent generation and nothing else.
+        run: |
+          python - <<'PY'
+          import glob, os, re
+          import config
+          keep = int(config.RETURNS_KEEP_GENERATIONS)
+          paths = sorted(glob.glob(os.path.join(config.STATE_DIR, "returns", "gen_*.npz")))
+          gens = sorted(int(re.search(r"gen_(\d+)\.npz$", p).group(1)) for p in paths)
+          if not gens:
+              print("no returns matrices yet")
+          else:
+              cutoff = max(gens) - keep
+              dropped = [p for p in paths
+                         if int(re.search(r"gen_(\d+)\.npz$", p).group(1)) < cutoff]
+              for p in dropped:
+                  os.remove(p)
+              print("%d matrices, newest gen %d, keeping the last %d -> pruned %d"
+                    % (len(paths), max(gens), keep, len(dropped)))
+          PY
+
+      - name: Commit state back
+        run: |
+          set -uo pipefail
+          git config user.name "arena[bot]"
+          git config user.email "arena@users.noreply.github.com"
+          git add -A state artifacts output data
+          if git diff --cached --quiet; then
+            echo "nothing changed — no commit"
+            exit 0
+          fi
+          GEN=$(python -c "import json;print(json.load(open('state/population.json'))['generation'])" 2>/dev/null || echo "?")
+          git commit -q -m "arena: gen ${GEN} [skip ci]" \
+            -m "Runner state from ${GITHUB_RUN_ID} (${GITHUB_EVENT_NAME}). The repo is the source of truth; this is the append."
+          # The Mac booster pushes to the same branch, so a rejected push is a
+          # normal event rather than an error. Rebase and retry; the ledger is
+          # idempotent on (genome, generation, fidelity), so a lost race wastes
+          # nothing but the retry.
+          for i in 1 2 3; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "pushed on attempt ${i}"
+              exit 0
+            fi
+            echo "push attempt ${i} failed; retrying"
+            sleep $((10 * i))
+          done
+          echo "could not push after 3 attempts — the work is in the run log and "
+          echo "will be recomputed; nothing on the remote is wrong."
+          exit 1

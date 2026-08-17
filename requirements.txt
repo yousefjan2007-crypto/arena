@@ -1,0 +1,24 @@
+# EXACT pins, read off the machine every result in state/ was produced on
+# (Python 3.9.5, macOS). The cloud runner installs these same versions under
+# Python 3.9 so that a Mac run and a runner run differ in ONE thing — the CPU —
+# and the per-platform determinism caveat in docs/DESIGN.md stays a statement
+# about BLAS float ordering rather than about library versions.
+#
+# docs/DESIGN.md pins the allowed dependency set: numpy, pandas, scipy,
+# scikit-learn, statsmodels, arch, yfinance, matplotlib, joblib and the standard
+# library. Nothing else may be added here — no torch, gym, xgboost, optuna,
+# numba or ray — because Python 3.9 is the floor and a dependency that cannot
+# run on this Mac cannot be verified before it is scheduled.
+numpy==2.0.2
+pandas==2.3.3
+scipy==1.13.1
+scikit-learn==1.6.1
+statsmodels==0.14.6
+arch==7.2.0
+yfinance==1.2.0
+matplotlib==3.9.4
+joblib==1.5.3
+# Not a modelling dependency: the system trust store fails with
+# CERTIFICATE_VERIFY_FAILED on every direct urllib call in this workspace, so
+# certifi supplies the CA bundle for the alert transports and the S&P table.
+certifi==2026.2.25

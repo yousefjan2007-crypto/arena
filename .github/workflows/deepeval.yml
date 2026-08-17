@@ -1,0 +1,76 @@
+name: deepeval
+
+# The weekly decision. docs/DESIGN.md "Scheduling & reporting": Sat 12:00 UTC,
+# up to 6h — F2 battery, the ten gates, a promotion or an honest refusal, and the
+# report. It runs on Saturday because the data has not moved since Friday's close,
+# so a decision made here is made on a full week of settled bars.
+on:
+  schedule:
+    - cron: "0 12 * * 6"          # Saturday 12:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+# SHARED with generation.yml — see the note there. A deep eval that overlapped a
+# generation would be deciding on state the generation was still writing.
+concurrency:
+  group: arena-state
+  cancel-in-progress: false
+
+jobs:
+  deepeval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      ARENA_N_JOBS: "4"
+      DEEPEVAL_TIME_BUDGET_MIN: "300"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify before deciding
+        run: python verify.py
+
+      - name: Deep eval, gates, decision, report
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        # No --refresh here: the deep eval decides, it does not search, and a
+        # promotion decided on bars that arrived between the generation and the
+        # gates would not be like-for-like with the candidates' own evaluation.
+        # run_deepeval.py builds output/report_gen<N>.md as its last step.
+        run: python run_deepeval.py --send
+
+      - name: Commit decision, artifacts and report back
+        run: |
+          set -uo pipefail
+          git config user.name "arena[bot]"
+          git config user.email "arena@users.noreply.github.com"
+          git add -A state artifacts output data
+          if git diff --cached --quiet; then
+            echo "nothing changed — no commit"
+            exit 0
+          fi
+          GEN=$(python -c "import json;print(json.load(open('state/population.json'))['generation'])" 2>/dev/null || echo "?")
+          git commit -q -m "arena: deep eval at gen ${GEN} [skip ci]" \
+            -m "Runner decision from ${GITHUB_RUN_ID} (${GITHUB_EVENT_NAME}). Promotion or refusal, its gate report, and the week's report."
+          for i in 1 2 3; do
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "pushed on attempt ${i}"
+              exit 0
+            fi
+            echo "push attempt ${i} failed; retrying"
+            sleep $((10 * i))
+          done
+          echo "could not push after 3 attempts — the decision is in the run log."
+          exit 1
