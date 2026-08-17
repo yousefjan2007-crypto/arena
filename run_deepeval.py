@@ -68,6 +68,7 @@ import pandas as pd                                                  # noqa: E40
 from joblib import Parallel, delayed                                 # noqa: E402
 
 import config                       # FIRST: puts the siblings on sys.path  # noqa: E402
+import alerts_arena                                                  # noqa: E402
 import datafeed                                                      # noqa: E402
 import evaluate                                                      # noqa: E402
 import evolution                                                     # noqa: E402
@@ -76,6 +77,7 @@ import gates                                                         # noqa: E40
 import genome as gn                                                  # noqa: E402
 import ledger                                                        # noqa: E402
 import registry                                                      # noqa: E402
+import reports as arena_reports                                      # noqa: E402
 import run_generation                                                # noqa: E402
 from env import CostModel                                            # noqa: E402
 from strategy import StrategyAgent                                   # noqa: E402
@@ -502,6 +504,26 @@ def store(entry, res, metrics, gate_report, decisions=None, artifact_dir=None,
                                    artifact_dir=artifact_dir)
 
 
+# ── alerting ───────────────────────────────────────────────────────────────────
+def champ_before_hash(state_dir=None) -> str:
+    champ = registry.champion(state_dir)
+    return champ[0] if champ else ""
+
+
+def _alert(generation, status: str, title: str, body: str, send: bool) -> bool:
+    """One alert, suppressed unless (champion, generation, status) has moved.
+
+    Same key as the generation job's, so the two anti-spam memories live side by
+    side in state/alert_state.json under their own kinds. A weekly refusal that
+    refuses the same candidates for the same reasons on the same generation is
+    not news the second time; a promotion always is, because the champion moved.
+    """
+    state = {"champion": champ_before_hash(),
+             "generation": None if generation is None else int(generation),
+             "status": status}
+    return alerts_arena.send_transition("deepeval", state, title, body, dry_run=not send)
+
+
 # ── the run ────────────────────────────────────────────────────────────────────
 def main() -> int:
     ap = argparse.ArgumentParser(                                   # io-boundary
@@ -523,6 +545,11 @@ def main() -> int:
                          "appends a rollback row to champion_history.csv")
     ap.add_argument("--reason", default="operator rollback",
                     help="the note recorded beside a --rollback row")
+    ap.add_argument("--send", action="store_true",
+                    help="deliver the decision alert; without it the exact text is "
+                         "printed and nothing is sent")
+    ap.add_argument("--no-report", action="store_true",
+                    help="skip building output/report_gen<N>.md at the end")
     args = ap.parse_args()
 
     if args.rollback:
@@ -540,6 +567,10 @@ def main() -> int:
               "exists is worse than no decision."
               % (cache_age, market.dates[-1].date(), bar_age,
                  config.MAX_DATA_STALENESS_DAYS))
+        title, body = alerts_arena.data_stale_summary(
+            cache_age, bar_age, market.dates[-1].date(),
+            config.MAX_DATA_STALENESS_DAYS, job="deep eval")
+        _alert(latest_generation(), "stale-data", title, body, args.send)
         return 1
 
     # getattr, not market.panel_hash: features.py attaches it ad hoc, and a None
@@ -558,6 +589,12 @@ def main() -> int:
     if not candidates:
         print("  nothing to evaluate: the hall of fame holds no genome that is not "
               "already the champion. Run a generation first.")
+        title, body = alerts_arena.deepeval_summary(
+            generation, [], champion_before=champ_before_hash(), status="nothing-to-evaluate",
+            platform=ledger.platform_tag(),
+            detail="The hall of fame holds no genome that is not already the "
+                   "champion, so there was nothing to put through the gates.")
+        _alert(generation, "nothing-to-evaluate", title, body, args.send)
         return 0
     champ_before = registry.champion()
     print("  parties   : %d candidate(s) from the hall of fame%s"
@@ -750,6 +787,43 @@ def main() -> int:
           "episodes per candidate" % (elapsed, args.jobs,
                                       measured[0][2]["cpcv_n_paths"] if measured else 0,
                                       config.CPCV_K))
+
+    # ── 6. the report, then the alert ─────────────────────────────────────────
+    # The report is built from what is now on disk, so it has to come after the
+    # artifacts and the history row — and before the alert, so a failure to draw a
+    # chart cannot swallow the decision notification.
+    if not args.no_report:
+        try:
+            path = arena_reports.build_report(generation)
+            print("  report    : %s" % os.path.relpath(path, config.ROOT))
+        except Exception as exc:                    # a report is a rendering of a
+            # decision that has already been made and persisted; failing to draw it
+            # must not turn a completed deep eval into a failed job.
+            print("  report    : FAILED to build (%s: %s) — the decision above still "
+                  "stands and is on disk" % (type(exc).__name__, str(exc)[:160]))
+
+    top = measured[0][2] if measured else {}
+    title, body = alerts_arena.deepeval_summary(
+        generation=generation,
+        candidates=[(e["hash"], bool(reports[e["hash"]]["all_pass"]),
+                     list(reports[e["hash"]]["failed"]))
+                    for e, _r, _m in measured] if measured else [],
+        promoted=(winner[0]["hash"] if winner and not args.dry else None),
+        champion_before=champ_before[0] if champ_before else None,
+        dsr=top.get("dsr"), n_trials=top.get("dsr_n_trials"),
+        vault_trials=top.get("vault_trials"),
+        status=("promoted" if winner else ("incomplete" if not complete else "refused")),
+        platform=ledger.platform_tag(),
+        detail=("DRY RUN: no artifacts, no champion move, no history row — but the "
+                "F2 ledger rows and vault accesses WERE written, because the "
+                "evaluation happened." if args.dry else ""))
+    status = ("promoted:%s" % winner[0]["hash"] if winner and not args.dry
+              else ("incomplete" if not complete
+                    else "refused:%s" % "+".join(
+                        sorted({g for e, _r, _m in measured
+                                for g in reports[e["hash"]]["failed"]}))))
+    _alert(generation, status, title, body, args.send)
+
     print_honesty(complete)
     return 0
 

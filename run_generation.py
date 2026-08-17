@@ -62,6 +62,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import argparse                                                       # noqa: E402
+import contextlib                                                     # noqa: E402
 import csv                                                            # noqa: E402
 import glob                                                           # noqa: E402
 import json                                                           # noqa: E402
@@ -74,12 +75,14 @@ import pandas as pd                                                   # noqa: E4
 from joblib import Parallel, delayed                                  # noqa: E402
 
 import config                       # FIRST: puts the siblings on sys.path  # noqa: E402
+import alerts_arena                                                   # noqa: E402
 import datafeed                                                       # noqa: E402
 import evaluate                                                       # noqa: E402
 import evolution                                                      # noqa: E402
 import features as arena_features                                     # noqa: E402
 import genome as gn                                                   # noqa: E402
 import ledger                                                         # noqa: E402
+import registry                                                       # noqa: E402
 from env import CostModel                                             # noqa: E402
 
 POPULATION_FILE = "population.json"
@@ -124,7 +127,112 @@ def data_staleness(market) -> tuple:
     return cache_age, bar_age
 
 
+# ── cache refresh (the one network step, and the only place that takes it) ─────
+@contextlib.contextmanager
+def _force_fetch():
+    """Make sell_in_may's fetcher treat every cached file as stale for the moment.
+
+    The mirror image of features._cache_only(), and it exists for a cloud-specific
+    reason: `data.py` decides freshness from the CSV's MTIME, and a git checkout
+    stamps every file with the time of the checkout. On a runner the cache is
+    therefore always "fresh" and would never be refreshed at all, however old the
+    bars inside it are.
+    """
+    saved = config.CACHE_MAX_AGE_DAYS
+    config.CACHE_MAX_AGE_DAYS = -1.0          # nothing is fresher than -1 days old
+    try:
+        yield
+    finally:
+        config.CACHE_MAX_AGE_DAYS = saved
+
+
+def refresh_cache(symbols, verbose=True) -> dict:
+    """Re-download the price cache for `symbols` + the macro tickers. Network!
+
+    THIS IS THE ONLY NETWORK CALL IN THE WHOLE RUN, and it happens strictly before
+    the market is loaded — never inside an evaluation path, where two runs of the
+    same generation could otherwise see different data (datafeed's module
+    docstring, and the reason load_market defaults to offline).
+
+    The macro tickers are not optional. features.py builds the panel through
+    signal_lab's macro frame, which reads ^TNX ^IRX ^VIX DX-Y.NYB HYG LQD from this
+    same cache; leaving them behind would extend the equity bars past the macro
+    bars and quietly fill the tail of every macro column with NaN.
+
+    A failed download is not fatal — the point of a cache-first design is that a
+    bad yfinance day degrades to stale data, which the staleness guard then judges
+    on its own terms.
+    """
+    macro = config.import_sibling("macro", config.SIGNAL_LAB)
+    wanted = list(dict.fromkeys(list(symbols) + list(macro.MACRO_TICKERS.values())))
+    stat = {"wanted": len(wanted), "ok": 0, "empty": 0, "error": 0}
+    with _force_fetch():
+        for sym in wanted:
+            try:
+                df = datafeed._read_symbol(sym, refresh=True)       # noqa: SLF001
+            except Exception:
+                stat["error"] += 1
+                continue
+            stat["ok" if len(df) else "empty"] += 1
+    if verbose:
+        print("  refresh   : %d symbols fetched (%d empty, %d errored) into %s"
+              % (stat["ok"], stat["empty"], stat["error"],
+                 os.path.relpath(config.CACHE_DIR, config.ROOT)
+                 if config.CACHE_DIR.startswith(config.ROOT) else config.CACHE_DIR))
+    return stat
+
+
+def generation_in_flight(generation, state_dir=None) -> bool:
+    """True when this generation already has evaluations on disk.
+
+    A refresh is only safe BETWEEN generations. Refreshing under a generation that
+    is half-evaluated moves data_hash and panel_hash, which makes every checkpoint
+    unusable, every already-ledgered row a different vintage, and the next
+    _append_trial an IdentityDrift abort (see that class's docstring). On a laptop
+    that is a loud stop a human resolves; on a twice-daily cloud schedule it is a
+    generation that can never finish, because every session would refresh again.
+
+    So the runner refreshes when it is starting fresh work and resumes on the
+    committed cache when it is finishing old work. Nothing is lost: the next
+    generation gets the new bars.
+    """
+    if generation is None:
+        return False
+    if glob.glob(os.path.join(tmp_dir(generation, state_dir), "*.npz")):
+        return True
+    path = ledger.ledger_path(state_dir)
+    if not os.path.exists(path):
+        return False
+    with open(path, newline="") as f:
+        return any(int(row["generation"]) == int(generation) for row in csv.DictReader(f))
+
+
 # ── population ─────────────────────────────────────────────────────────────────
+def pending_generation(state_dir=None):
+    """The generation population.json points at, or None if there is no population.
+
+    Read before the market is loaded, because both the refresh guard above and the
+    alert's anti-spam key need to know which generation this run is about.
+    """
+    path = os.path.join(state_dir or config.STATE_DIR, POPULATION_FILE)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return int(json.load(f)["generation"])
+    except Exception:
+        return None
+
+
+def alert(kind: str, generation, status: str, title: str, body: str, send: bool) -> bool:
+    """One alert, suppressed unless (champion, generation, status) has moved."""
+    champ = registry.champion()
+    state = {"champion": champ[0] if champ else "",
+             "generation": None if generation is None else int(generation),
+             "status": status}
+    return alerts_arena.send_transition(kind, state, title, body, dry_run=not send)
+
+
 def seed_population(n: int, feature_names, generation: int = 0) -> list:
     """`n` uniformly drawn genomes as population entries, each from its own
     reproducible stream.
@@ -748,6 +856,30 @@ def _print_summary(res: dict, market, entries, n_jobs: int, elapsed: float,
                      r["birth_gen"], r["op"]))
 
 
+def _summary_alert(res: dict, generation: int, status: str, budget_min: float) -> tuple:
+    """The nightly one-liner, from the numbers the run just printed.
+
+    An incomplete generation is a DIFFERENT state from a complete one, which is
+    what keeps the anti-spam honest: a second session that is still grinding
+    through the same generation says nothing, and the session that finishes it
+    speaks.
+    """
+    sr = [r["sharpe_prevault"] for _e, r, _s in res["f1"]]
+    champ = registry.champion()
+    detail = ("%d F0 screens + %d F1 episodes this run." % (len(res["f0"]), len(res["f1"])))
+    if status != "complete":
+        detail += (" The %.0f-min budget was spent during %s; the work is "
+                   "checkpointed and the next session resumes it. Nothing was bred — "
+                   "breeding from a half-evaluated generation would select on which "
+                   "genomes happened to be cheap." % (budget_min, res["stage"]))
+    return alerts_arena.generation_summary(
+        generation=generation, n_evaluated=len(res["f1"]), n_trials=ledger.n_trials(),
+        best_sharpe=max(sr) if sr else None,
+        median_sharpe=float(np.median(sr)) if sr else None,
+        champion="%s (promoted through all ten gates)" % champ[0] if champ else None,
+        status=status, platform=ledger.platform_tag(), detail=detail)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="run one arena generation")   # io-boundary
     ap.add_argument("--init", action="store_true",
@@ -760,6 +892,13 @@ def main() -> int:
     ap.add_argument("--budget-min", type=float, default=float(config.GEN_TIME_BUDGET_MIN),
                     help="wall-clock budget in minutes; the run checkpoints and exits 0 "
                          "when it is spent (default config.GEN_TIME_BUDGET_MIN)")
+    ap.add_argument("--refresh", action="store_true",
+                    help="re-download the price cache before evaluating (the cloud "
+                         "path; skipped automatically when the generation is already "
+                         "mid-flight, which a refresh would break)")
+    ap.add_argument("--send", action="store_true",
+                    help="deliver the summary alert; without it the exact text is "
+                         "printed and nothing is sent")
     args = ap.parse_args()
 
     t_start = time.time()                                      # io-boundary
@@ -773,6 +912,22 @@ def main() -> int:
     #    cache degrades to the static fallback rather than failing.)
     universe = config.import_sibling("universe", config.SIGNAL_LAB)
     wanted = universe.build_universe()[0]
+
+    pending = 0 if args.init else pending_generation()
+    if args.refresh:
+        if generation_in_flight(pending):
+            print("  refresh   : SKIPPED — generation %s is mid-flight. New bars would "
+                  "move data_hash under work already on disk, orphaning every "
+                  "checkpoint and stopping the run on IdentityDrift; this session "
+                  "finishes on the committed cache and the next generation takes "
+                  "the new data." % pending)
+        else:
+            # The symbols ALREADY cached, not everything the universe wants: the
+            # committed cache is what defines this arena's symbol set, and pulling a
+            # newly-listed name into it mid-stream would move data_hash for a reason
+            # that has nothing to do with new bars.
+            refresh_cache(datafeed.in_cache(wanted) or wanted)
+
     symbols = datafeed.in_cache(wanted)[:config.UNIVERSE_SIZE]
     market = datafeed.load_market(symbols, start=config.DATA_START)
 
@@ -783,6 +938,10 @@ def main() -> int:
               "sandbox scores genomes on a market that no longer exists."
               % (cache_age, market.dates[-1].date(), bar_age,
                  config.MAX_DATA_STALENESS_DAYS))
+        title, body = alerts_arena.data_stale_summary(
+            cache_age, bar_age, market.dates[-1].date(),
+            config.MAX_DATA_STALENESS_DAYS, job="generation")
+        alert("generation", pending, "stale-data", title, body, args.send)
         return 1
 
     arena_features.build_features(market)
@@ -828,6 +987,14 @@ def main() -> int:
         print("\n  ABORT: inputs changed under an evaluated generation\n")
         for line in str(exc).splitlines():
             print("  %s" % line)
+        title, body = alerts_arena.generation_summary(
+            generation, 0, ledger.n_trials(), status="identity-drift",
+            platform=ledger.platform_tag(),
+            detail="Inputs moved under a generation that was already partly on disk. "
+                   "Nothing was bred and nothing was overwritten; this needs a human "
+                   "(restore the data the ledger row names, or evaluate the "
+                   "population as a new generation).")
+        alert("generation", generation, "identity-drift", title, body, args.send)
         return 1
 
     elapsed = (time.time() - t_start) / 60.0                   # io-boundary
@@ -839,9 +1006,13 @@ def main() -> int:
               "selected from a half-evaluated generation would be selecting on which "
               "genomes happened to be cheap." % generation)
         print("  elapsed   : %.1f min" % elapsed)
+        title, body = _summary_alert(res, generation, "incomplete", args.budget_min)
+        alert("generation", generation, "incomplete", title, body, args.send)
         return 0
 
     _print_summary(res, market, entries, n_jobs, elapsed, rows_before)
+    title, body = _summary_alert(res, generation, "complete", args.budget_min)
+    alert("generation", generation, "complete", title, body, args.send)
     if args.no_evolve:
         print("  --no-evolve: stopped before breeding; generation %d stays open and its "
               "checkpoints are kept, so the next run resumes rather than re-simulates."

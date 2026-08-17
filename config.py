@@ -242,8 +242,13 @@ HOF_SIZE = 10                       # hall-of-fame depth (top-N all-time by pre-
 # population breeds nothing at all — so evolution.slot_counts caps the two carried
 # groups at this fraction and scales them down proportionally. A no-op at POP_SIZE.
 EVOLVE_MAX_CARRY_FRAC = 0.5
-GEN_TIME_BUDGET_MIN = 180
-N_JOBS = 8                          # 8 on the Mac booster; the cloud runner sets 4
+# The three knobs below are HOW FAST, NOT WHAT — they are in _CONFIG_HASH_SKIP, so
+# none of them can move a result's identity, which is exactly why they are the
+# three the environment is allowed to override. The runner has 4 vCPUs and a 6-hour
+# job ceiling; this Mac has 14 cores and no ceiling. Same settings, same hashes,
+# different machines. (io-boundary: environment read, no compute path involved.)
+GEN_TIME_BUDGET_MIN = float(os.environ.get("GEN_TIME_BUDGET_MIN") or 180)
+N_JOBS = int(os.environ.get("ARENA_N_JOBS") or 8)
 
 # ── the evaluation ladder (evaluate.py) ────────────────────────────────────────
 # F0 is a SCREEN, not a measurement: three disjoint five-year eras, a smaller
@@ -332,7 +337,18 @@ RUIN_MC_YEARS = 2
 # every candidate after it — the honesty tax is paid in the gate, so the number of
 # looks belongs in the config digest rather than on a command line.
 DEEPEVAL_CANDIDATES = 2
-DEEPEVAL_TIME_BUDGET_MIN = 360      # the Actions deepeval.yml window (6 h)
+# The Actions deepeval.yml window (6 h); env-overridable for the same reason as
+# GEN_TIME_BUDGET_MIN above, and skip-listed for the same reason.
+DEEPEVAL_TIME_BUDGET_MIN = float(os.environ.get("DEEPEVAL_TIME_BUDGET_MIN") or 360)
+
+# ── repo growth policy (docs/DESIGN.md "Repo growth policy") ───────────────────
+# The permanent record is the trial ledger, the hall of fame and the champion
+# artifacts. The per-generation returns matrices are ~400 kB each and exist to
+# feed the cohort PBO of a RECENT generation, so the workflow prunes the ones
+# older than this. Skip-listed: deleting a file that nothing reads changes no
+# number, and a repo that grew without bound would eventually make every cloud
+# checkout slower than the run it enables.
+RETURNS_KEEP_GENERATIONS = 90
 
 # ── execution ──────────────────────────────────────────────────────────────────
 # "sandbox" -> "paper" -> "live". Going live is a human-only flip; nothing in this
@@ -371,6 +387,7 @@ EXECUTION_MODE = "sandbox"
 _CONFIG_HASH_SKIP = frozenset({
     "STATE_DIR", "ARTIFACT_DIR", "OUTPUT_DIR", "DATA_DIR",   # where files live
     "N_JOBS", "GEN_TIME_BUDGET_MIN", "DEEPEVAL_TIME_BUDGET_MIN",   # how fast, not what
+    "RETURNS_KEEP_GENERATIONS",                     # what is kept, not what was computed
     "ENV_CHECK_INVARIANTS",                         # asserts, never arithmetic
 })
 # Inherited, never redeclared here, but the simulation reads them. (SEED is also

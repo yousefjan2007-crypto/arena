@@ -1,0 +1,356 @@
+"""
+Alert delivery for arena — one wrapper over signal_lab's notifier, plus the two
+things a scheduled cloud job needs that a laptop job does not.
+
+WHAT IS REUSED. The transport (macOS Notification Center, ntfy.sh, Telegram, all
+with certifi SSL and retries) is signal_lab/alerts.py, imported through
+config.import_sibling so it resolves to the live checkout on this Mac and to
+vendor/signal_lab/alerts.py on the runner. Nothing about HTTP is re-implemented
+here; the only transport decision this module makes is skipping the osascript
+branch off macOS, because an Actions runner has no Notification Center and
+subprocess would just print a traceback into the log twice a day.
+
+WHAT IS NEW.
+
+  1. Env-first credentials. GitHub Actions injects secrets as environment
+     variables, and the Mac chain (arena/config.local.json ->
+     vrp_backtest/monitor_config.json) does not exist on a runner. credentials()
+     reads the environment FIELD BY FIELD and falls back to the local chain for
+     whatever the environment did not supply, so a half-configured machine sends
+     on the channels it can and stays quiet on the rest.
+
+  2. State-transition anti-spam. These jobs run twice a day, 7 days a week, and
+     most runs have nothing new to say: the same generation still mid-flight, the
+     same candidate refused by the same three gates. state/alert_state.json
+     remembers, per alert kind, the STATE that was last delivered — (champion,
+     generation, status) — and an identical state sends nothing. This is the
+     house pattern (vrp_backtest, deepvalue): anti-spam by comparing against the
+     last logged state, never by a timer or an in-process loop, because the
+     scripts are one-shot and remember nothing between invocations.
+
+     A dry run never writes that file. Otherwise a `--send`-less rehearsal would
+     silently swallow the next real alert, and the one thing an alerting path
+     must not do is go quiet for a reason nobody chose.
+
+The composers are pure functions of already-computed numbers — no I/O, no
+config reads beyond thresholds — so they can be exercised without a market, a
+population, or a network. `python3 alerts_arena.py` prints both formats dry,
+including the suppression behaviour, against a temporary state directory.
+
+EVERY BODY ENDS WITH THE HONESTY LINE. Not decoration: an alert is the only part
+of this system most people will ever read, and a Sharpe number with no caveat
+attached is a claim this project does not make.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+import config                       # FIRST: puts the siblings on sys.path
+
+# The transport, from whichever signal_lab is in play (live on the Mac, vendored
+# on the runner). Loaded by explicit path because arena has no `alerts` of its own
+# to clash with, but the sibling's `import config` must still land on arena's.
+_alerts = config.import_sibling("alerts", config.SIGNAL_LAB)
+
+ALERT_STATE_FILE = "alert_state.json"
+
+ALERT_STATE_NOTE = ("REWRITTEN on every delivered alert: the last state announced "
+                    "per alert kind, so a repeated state stays quiet. Not a record "
+                    "of anything — the trial ledger, the deep-eval history and "
+                    "champion_history.csv are where decisions live.")
+
+# docs/DESIGN.md, "Risks & honest limitations" — the core honesty statement and the
+# survivorship disclosure, verbatim in every user-facing output.
+HONESTY_LINE = ("Backtest alpha is a claim about the past, not a guarantee — "
+                "not financial advice.")
+SURVIVORSHIP_LINE = ("Survivorship: the universe is today's S&P 500 membership, so "
+                     "long results flatter and short results understate.")
+
+
+# ── credentials ────────────────────────────────────────────────────────────────
+def credentials() -> dict:
+    """Notifier secrets, environment first, local chain second, field by field.
+
+    TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / NTFY_TOPIC are the Actions path (repo
+    secrets -> workflow env). config.load_credentials() is the Mac path. Neither
+    is required: a channel with no credential is simply not used.
+
+    Returns the shape signal_lab's alerts.py expects, and NEVER logs a value.
+    """
+    env_topic = os.environ.get("NTFY_TOPIC")                        # io-boundary
+    env_token = os.environ.get("TELEGRAM_BOT_TOKEN")                # io-boundary
+    env_chat = os.environ.get("TELEGRAM_CHAT_ID")                   # io-boundary
+
+    local = {"ntfy_topic": None, "telegram": {}}
+    if not (env_topic and env_token and env_chat):
+        try:
+            local = config.load_credentials()
+        except Exception:
+            pass
+    tg = local.get("telegram") or {}
+    return {"ntfy_topic": env_topic or local.get("ntfy_topic"),
+            "telegram": {"bot_token": env_token or tg.get("bot_token"),
+                         "chat_id": env_chat or tg.get("chat_id")}}
+
+
+def channels(creds=None) -> list:
+    """Names of the channels that would actually receive a send. Never values."""
+    creds = creds if creds is not None else credentials()
+    tg = creds.get("telegram") or {}
+    out = []
+    if sys.platform == "darwin":
+        out.append("macos")
+    if creds.get("ntfy_topic"):
+        out.append("ntfy")
+    if tg.get("bot_token") and tg.get("chat_id"):
+        out.append("telegram")
+    return out
+
+
+# ── delivery ───────────────────────────────────────────────────────────────────
+def send_all(title: str, body: str, dry_run: bool = True) -> list:
+    """Print the exact text, then deliver it unless this is a dry run.
+
+    Returns the list of channels delivered to (empty on a dry run). The printing
+    is not a debug aid — a dry run's whole output IS the alert, and the scheduled
+    job's log is where a human checks what was said.
+    """
+    print("\n=== ALERT %s ===" % ("(DRY RUN — not sent)" if dry_run else "(SENDING)"))
+    print(title)
+    print(body)
+    if dry_run:
+        return []
+
+    creds = credentials()
+    used = channels(creds)
+    if "macos" in used:
+        # Off macOS there is no Notification Center; osascript would fail on every
+        # scheduled run and say nothing useful when it did.
+        _alerts.macos_notify(title, body)
+    if "ntfy" in used:
+        _alerts.ntfy_notify(creds["ntfy_topic"], title, body)
+    if "telegram" in used:
+        _alerts.telegram_notify(creds["telegram"]["bot_token"],
+                                creds["telegram"]["chat_id"], title, body)
+    print("  delivered to: %s" % (", ".join(used) if used else
+                                  "nothing (no channel is configured on this machine)"))
+    return used
+
+
+# ── state-transition anti-spam ─────────────────────────────────────────────────
+def alert_state_path(state_dir=None) -> str:
+    return os.path.join(state_dir or config.STATE_DIR, ALERT_STATE_FILE)
+
+
+def load_alert_state(state_dir=None) -> dict:
+    """The whole file, or an empty dict. A corrupt file reads as empty: the
+    failure mode of forgetting is a duplicate alert, and the failure mode of
+    raising is a scheduled job that dies at the last step with its work done."""
+    path = alert_state_path(state_dir)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            payload = json.load(f)
+        return payload.get("kinds", {})
+    except Exception:
+        return {}
+
+
+def _save_alert_state(kinds: dict, state_dir=None) -> str:
+    path = alert_state_path(state_dir)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"note": ALERT_STATE_NOTE, "kinds": kinds}, f, indent=1, sort_keys=True)
+    os.replace(tmp, path)
+    return path
+
+
+def is_new_state(kind: str, state: dict, state_dir=None) -> bool:
+    """True when `state` differs from the one last DELIVERED under `kind`."""
+    last = load_alert_state(state_dir).get(kind)
+    return json.dumps(last, sort_keys=True) != json.dumps(state, sort_keys=True)
+
+
+def send_transition(kind: str, state: dict, title: str, body: str,
+                    dry_run: bool = True, state_dir=None) -> bool:
+    """Deliver only on a state transition. Returns True if an alert was delivered.
+
+    `state` is the small dict that decides sameness — champion, generation, status
+    — and nothing that moves on its own (no timestamps, no elapsed seconds), or
+    every run would look like a transition and the anti-spam would be decorative.
+    """
+    new = is_new_state(kind, state, state_dir)
+    if not new:
+        print("\n=== ALERT SUPPRESSED (%s) — state unchanged since the last one sent: %s"
+              % (kind, json.dumps(state, sort_keys=True)))
+        return False
+    send_all(title, body, dry_run=dry_run)
+    if dry_run:
+        print("  (dry run: state/%s not updated, so the real send is still armed)"
+              % ALERT_STATE_FILE)
+        return False
+    kinds = load_alert_state(state_dir)
+    kinds[kind] = state
+    _save_alert_state(kinds, state_dir)
+    return True
+
+
+# ── composers (pure) ───────────────────────────────────────────────────────────
+def _sr(value) -> str:
+    """A Sharpe, or a dash. None and NaN both mean "no number", and printing
+    'nan' in an alert reads as a bug rather than as an absence."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return "  n/a"
+    return "  n/a" if f != f else "%+.2f" % f
+
+
+def generation_summary(generation: int, n_evaluated: int, n_trials: int,
+                       best_sharpe=None, median_sharpe=None, champion=None,
+                       status: str = "complete", platform: str = "",
+                       detail: str = "") -> tuple:
+    """The nightly one-liner of docs/DESIGN.md, plus the caveat it needs.
+
+    status  "complete" | "incomplete" | "stale-data" | "identity-drift" — the
+            kill-state half of the anti-spam key. A generation that is still
+            mid-flight after a second session is the SAME state and says nothing;
+            the same generation reaching "complete" is a transition and does.
+    """
+    head = "arena gen %d — %s" % (generation, status)
+    title = "%s: %d evaluated, best SR %s" % (head, n_evaluated, _sr(best_sharpe))
+
+    lines = ["gen %d  |  %d genomes evaluated this run  |  ledger %d distinct trials"
+             % (generation, n_evaluated, n_trials)]
+    if best_sharpe is not None or median_sharpe is not None:
+        lines.append("F1 net Sharpe (pre-vault): best %s   median %s"
+                     % (_sr(best_sharpe), _sr(median_sharpe)))
+    lines.append("champion: %s" % (champion or "none yet — no candidate has passed "
+                                               "all ten gates"))
+    if platform:
+        lines.append("platform: %s" % platform)
+    if detail:
+        lines.append("")
+        lines.append(detail)
+    lines += ["",
+              "Pre-vault and ungated: the population was SEARCHED, so its best is "
+              "biased upward by construction — that is what the trial ledger, DSR, "
+              "PBO, the vault and the gate stack exist to discount.",
+              SURVIVORSHIP_LINE,
+              HONESTY_LINE]
+    return title, "\n".join(lines)
+
+
+def deepeval_summary(generation: int, candidates, promoted=None, champion_before=None,
+                     dsr=None, n_trials=None, vault_trials=None, status: str = "refused",
+                     platform: str = "", detail: str = "") -> tuple:
+    """The weekly decision, promotion or refusal, with the failed gates named.
+
+    candidates  [(hash, passed: bool, [failed gate ids])] in the order evaluated.
+                A refusal that does not say WHICH gates refused is a shrug, and
+                the gates are the entire reason this project's numbers are worth
+                anything.
+    """
+    if promoted:
+        title = "arena deep eval gen %d: PROMOTED %s" % (generation, promoted)
+    elif status == "incomplete":
+        title = "arena deep eval gen %d: INCOMPLETE — nothing promoted" % generation
+    else:
+        title = ("arena deep eval gen %d: REFUSED — %d candidate(s), 0 promoted"
+                 % (generation, len(candidates)))
+
+    lines = []
+    for ghash, passed, failed in candidates:
+        lines.append("%s  %s" % (ghash, "PASSED all ten gates" if passed else
+                                 "failed %s" % ("+".join(failed) or "?")))
+    if dsr is not None:
+        # DSR is never quoted without its N: it is a correction FOR the number of
+        # trials, so the number of trials is half the statistic.
+        lines.append("DSR %s at N=%s ledger trials%s"
+                     % (dsr, n_trials if n_trials is not None else "?",
+                        ", %s vault trials" % vault_trials if vault_trials is not None else ""))
+    lines.append("champion: %s%s"
+                 % (champion_before or "none",
+                    " -> %s" % promoted if promoted else " (unchanged)"))
+    if platform:
+        lines.append("platform: %s" % platform)
+    if detail:
+        lines.append("")
+        lines.append(detail)
+    lines += ["",
+              "Passing the gates is risk REDUCTION, not proof: correlated "
+              "evolutionary trials leave the ledger DSR under-deflated, and PBO "
+              "does not cover designer-level choices.",
+              SURVIVORSHIP_LINE,
+              HONESTY_LINE]
+    return title, "\n".join(lines)
+
+
+def data_stale_summary(cache_age: float, bar_age: float, last_bar, limit: int,
+                       job: str = "generation") -> tuple:
+    """The abort DESIGN asks for by name: 'abort with alert if staleness > 5 days'."""
+    title = "arena %s ABORTED: data is %.1f days stale" % (job, max(cache_age, bar_age))
+    body = "\n".join([
+        "cache %.1f days old, last bar %s (%.1f days old); limit is %d."
+        % (cache_age, last_bar, bar_age, limit),
+        "Nothing was evaluated. A stale sandbox scores genomes on a market that no "
+        "longer exists, which is worse than not scoring them at all.",
+        "",
+        HONESTY_LINE])
+    return title, body
+
+
+if __name__ == "__main__":
+    import tempfile
+
+    print("arena alerts")
+    creds = credentials()
+    print("  channels    : %s" % (", ".join(channels(creds)) or "none configured"))
+    print("  credentials : ntfy=%s telegram_token=%s telegram_chat=%s  (presence only, "
+          "never values)" % (bool(creds["ntfy_topic"]), bool(creds["telegram"]["bot_token"]),
+                             bool(creds["telegram"]["chat_id"])))
+
+    t1, b1 = generation_summary(generation=2, n_evaluated=12, n_trials=84,
+                                best_sharpe=0.83, median_sharpe=0.21, champion=None,
+                                status="complete", platform="x86_64linux")
+    t2, b2 = deepeval_summary(generation=2,
+                              candidates=[("9353d613c7d3", False, ["G2", "G4", "G8"]),
+                                          ("35d85a0408d2", False, ["G2", "G4", "G8"])],
+                              promoted=None, champion_before=None, dsr="0.046",
+                              n_trials=84, vault_trials=4, status="refused",
+                              platform="x86_64linux")
+    t3, b3 = data_stale_summary(6.2, 6.0, "2026-08-11", config.MAX_DATA_STALENESS_DAYS)
+
+    tmp = tempfile.mkdtemp(prefix="arena_alert_")
+    print("\n--- composer 1: the nightly generation line ---")
+    send_all(t1, b1, dry_run=True)
+    print("\n--- composer 2: the weekly deep-eval decision ---")
+    send_all(t2, b2, dry_run=True)
+    print("\n--- composer 3: the staleness abort ---")
+    send_all(t3, b3, dry_run=True)
+
+    # Anti-spam, end to end, against a throwaway state dir: a first state is
+    # delivered, the identical state is silent, a moved state speaks again.
+    print("\n--- state-transition anti-spam (delivery simulated: no channel is "
+          "contacted because this run writes state only) ---")
+    state_a = {"champion": "", "generation": 2, "status": "incomplete"}
+    state_b = {"champion": "", "generation": 2, "status": "complete"}
+    kinds = load_alert_state(tmp)
+    kinds["generation"] = state_a
+    _save_alert_state(kinds, tmp)
+    same = is_new_state("generation", state_a, tmp)
+    moved = is_new_state("generation", state_b, tmp)
+    print("  after recording %s:" % json.dumps(state_a, sort_keys=True))
+    print("    identical state is new? %s   (expected False — the re-trigger stays quiet)"
+          % same)
+    print("    completed state is new? %s   (expected True  — the transition speaks)"
+          % moved)
+    print("  smoke: %s" % ("PASS" if (not same and moved) else "FAIL"))
+    print("  state file  : %s" % alert_state_path(tmp))
+    for line in (b1, b2, b3):
+        assert line.rstrip().endswith(HONESTY_LINE), "a body reached a channel without the footer"
+    print("  every body ends with the honesty line: PASS")
