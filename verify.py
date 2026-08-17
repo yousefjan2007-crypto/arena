@@ -31,6 +31,15 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here:
   6. Cost linearity      the same trade stream at stress_mult 0/1/2 costs
                          exactly 0/c/2c per component, and the frictionless
                          equity path dominates the costed ones pointwise.
+  7. Gates               the ten-gate stack on synthetic metric dicts: an
+                         all-pass report promotes (and moves the champion pointer
+                         with a history row), every single-gate violation blocks
+                         on its own, a tie goes to the incumbent, a data_hash
+                         mismatch fails G1 whatever the scores say, and no
+                         incumbent skips G9 while the other nine still bind.
+                         Plus the two F2 inputs with rules of their own:
+                         regime slices pass by absence, and the bootstrap CI is
+                         reproducible from a fixed rng.
   8. Trial ledger        k evaluations write exactly k rows, an identical re-run
                          writes none, DSR falls monotonically as the trial count
                          grows, and every vault access is counted.
@@ -47,7 +56,7 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here:
                          backtest overfitting; plant one genuinely persistent
                          column and it reports a low one, having found it.
 
-Still to come: 7 gates (Phase 5).
+All eleven of docs/DESIGN.md's checks are now implemented.
 
 Everything here runs on a synthetic, seeded market. verify.py NEVER touches the
 network or the cache: the test suite must give the same answer on a plane, on a
@@ -69,8 +78,10 @@ import datafeed
 import evaluate
 import evolution
 import features as arena_features
+import gates
 import genome as gn
 import ledger
+import registry
 import run_generation
 from env import CostModel, MarketEnv
 from strategy import StrategyAgent
@@ -987,6 +998,195 @@ def test_cost_linearity():
           "final $%.2f >= $%.2f >= $%.2f" % (e0[-1], e1[-1], e2[-1]))
 
 
+# ── 7. gates ───────────────────────────────────────────────────────────────────
+# One candidate that clears every gate with room to spare, and an incumbent it
+# beats. Every case below is this dict with ONE field moved, so a failure names
+# exactly the rule that broke rather than a soup of interacting numbers.
+PASSING_CAND = {
+    "hash": "cand00000001",
+    "identity": ("data0000deadbeef", "panel000cafebabe", "cfg00000feedface"),
+    "window": ("1999-01-04", "2019-12-31"),
+    "resimulated": True,
+    "sharpe": 1.10, "dsr": 0.98, "dsr_n_trials": 812,
+    "vault_sharpe": 0.65, "vault_dsr": 0.94, "vault_trials": 6,
+    "pbo": 0.12,
+    "cpcv_frac_positive": 0.82, "cpcv_median_sharpe": 0.55, "cpcv_n_paths": 28,
+    "boot_ci_lo": 0.31, "boot_ci_hi": 1.88,
+    "sharpe_stress": 0.74,
+    "regime_slices": [0.12, -0.03, 0.08, -0.02],
+    "rolling_win_frac": 0.71, "rolling_n_windows": 45,
+    "p_ruin": 0.02,
+}
+PASSING_INC = dict(PASSING_CAND, hash="incum0000001", sharpe=0.80)
+
+# (gate, the single field that violates it) — one per gate, all ten.
+GATE_VIOLATIONS = [
+    ("G1", {"identity": ("OTHERdata0000000", "panel000cafebabe", "cfg00000feedface")}),
+    ("G2", {"dsr": config.GATE_MIN_DSR - 0.001}),
+    ("G3", {"vault_dsr": config.GATE_VAULT_MIN_DSR - 0.001}),
+    ("G4", {"pbo": config.GATE_MAX_PBO + 0.001}),
+    ("G5", {"cpcv_frac_positive": config.GATE_CPCV_MIN_POS_FRAC - 0.001}),
+    ("G6", {"boot_ci_lo": 0.0}),
+    ("G7", {"sharpe_stress": (config.GATE_STRESS_MIN_SR_RATIO - 0.01) * 1.10}),
+    ("G8", {"regime_slices": [config.GATE_REGIME_MAX_LOSS - 0.001, -0.03, 0.08, -0.02]}),
+    ("G9", {"rolling_win_frac": config.GATE_ROLLING_WIN_FRAC - 0.001}),
+    ("G10", {"p_ruin": config.GATE_RUIN_MAX_PROB}),
+]
+
+
+def test_gates():
+    """DESIGN check 7. The decision stack is a pure function of two metric dicts,
+    so it can be tested exhaustively without a market — and it is: all ten gates,
+    one violation at a time, plus the three rules that are easy to get subtly
+    wrong (ties, a missing incumbent, and an identity mismatch outranking every
+    score in the report)."""
+    print("\n7. Promotion gates (G1-G10, pure functions of two metric dicts)")
+
+    report = gates.evaluate_gates(PASSING_CAND, PASSING_INC)
+    check("a candidate clearing every threshold passes all ten", report["all_pass"],
+          "%d gates, none failed; ties_to_incumbent=%s"
+          % (report["n_gates"], report["ties_to_incumbent"]))
+    check("the report covers exactly DESIGN's ten gates",
+          list(report["gates"]) and set(report["gates"]) == set(gates.GATE_ORDER)
+          and len(gates.GATE_ORDER) == 10,
+          ", ".join(gates.GATE_ORDER))
+
+    blocked = []
+    for gid, patch in GATE_VIOLATIONS:
+        rep = gates.evaluate_gates(dict(PASSING_CAND, **patch), PASSING_INC)
+        blocked.append((gid, rep["failed"] == [gid]))
+    check("every single-gate violation blocks promotion, alone",
+          all(good for _g, good in blocked),
+          "; ".join("%s %s" % (g, "blocks" if good else "DID NOT BLOCK ALONE")
+                    for g, good in blocked))
+
+    # A tie is not a win: the candidate matches the incumbent exactly, and again
+    # at exactly the required margin. Neither may promote.
+    tie = gates.evaluate_gates(dict(PASSING_CAND, sharpe=PASSING_INC["sharpe"]), PASSING_INC)
+    on_margin = gates.evaluate_gates(
+        dict(PASSING_CAND, sharpe=PASSING_INC["sharpe"] + config.GATE_BEAT_SR_MARGIN),
+        PASSING_INC)
+    check("a tie goes to the incumbent (G9 is a strict beat)",
+          not tie["gates"]["G9"]["pass"] and not on_margin["gates"]["G9"]["pass"]
+          and not tie["all_pass"] and not on_margin["all_pass"],
+          "equal Sharpe -> G9 %s; exactly incumbent+%.2f -> G9 %s"
+          % ("FAIL" if not tie["gates"]["G9"]["pass"] else "pass",
+             config.GATE_BEAT_SR_MARGIN,
+             "FAIL" if not on_margin["gates"]["G9"]["pass"] else "pass"))
+
+    # G1 outranks the scoreboard: a spectacular candidate measured on other data
+    # is not a candidate, it is an anecdote.
+    spectacular = dict(PASSING_CAND, sharpe=9.9, dsr=0.999, vault_sharpe=3.0,
+                       vault_dsr=0.99, pbo=0.0, cpcv_frac_positive=1.0,
+                       cpcv_median_sharpe=2.5, boot_ci_lo=2.0, sharpe_stress=9.0,
+                       p_ruin=0.0, rolling_win_frac=1.0,
+                       identity=("DIFFERENTdata001",) + PASSING_CAND["identity"][1:])
+    rep = gates.evaluate_gates(spectacular, PASSING_INC)
+    check("a data_hash mismatch fails G1 whatever the scores are",
+          not rep["all_pass"] and rep["failed"] == ["G1"],
+          "nine gates pass on numbers measured against other data; G1: %s"
+          % rep["gates"]["G1"]["detail"])
+    resumed = gates.evaluate_gates(PASSING_CAND, dict(PASSING_INC, resimulated=False))
+    check("...and so does an incumbent that was not re-simulated fresh",
+          not resumed["all_pass"] and resumed["failed"] == ["G1"],
+          resumed["gates"]["G1"]["detail"][:88])
+
+    # No incumbent: G9 is skipped (nothing to beat) and G1 has nothing to compare
+    # against, so it degrades to "is this candidate's own identity complete". The
+    # other EIGHT must still bind exactly as they do with a champion present.
+    solo = gates.evaluate_gates(PASSING_CAND, None)
+    solo_broken = [gid for gid, patch in GATE_VIOLATIONS if gid not in ("G1", "G9")
+                   and gates.evaluate_gates(dict(PASSING_CAND, **patch), None)["failed"] != [gid]]
+    check("with no incumbent G9 is skipped and the other gates still bind",
+          solo["all_pass"] and solo["gates"]["G9"]["pass"] and not solo_broken,
+          "G9: %s" % solo["gates"]["G9"]["detail"])
+
+    # features.py attaches panel_hash to the MarketData ad hoc, so a caller
+    # reading it with getattr can hold None. That must fail G1 — with or without
+    # an incumbent — rather than compare equal to another missing hash.
+    blind = dict(PASSING_CAND, identity=(PASSING_CAND["identity"][0], None,
+                                         PASSING_CAND["identity"][2]))
+    check("a missing panel_hash fails G1 even when there is no incumbent",
+          not gates.evaluate_gates(blind, None)["gates"]["G1"]["pass"]
+          and not gates.evaluate_gates(blind, PASSING_INC)["gates"]["G1"]["pass"],
+          gates.evaluate_gates(blind, None)["gates"]["G1"]["detail"])
+
+    # An unmeasurable gate is a failed gate — never a skipped one.
+    for missing in ("dsr", "pbo", "p_ruin", "boot_ci_lo"):
+        rep = gates.evaluate_gates({k: v for k, v in PASSING_CAND.items() if k != missing},
+                                   PASSING_INC)
+        if rep["all_pass"]:
+            break
+    else:
+        missing = None
+    check("a missing measurement fails its gate rather than skipping it",
+          missing is None, "dsr / pbo / p_ruin / boot_ci_lo each removed in turn")
+
+    # The report a passing candidate produces has to be able to MOVE the pointer,
+    # and a failing one has to be refused by the registry itself.
+    tmp = tempfile.mkdtemp(prefix="arena_gates_")
+    try:
+        good = gates.evaluate_gates(PASSING_CAND, PASSING_INC)
+        bad = gates.evaluate_gates(dict(PASSING_CAND, dsr=0.1), PASSING_INC)
+        registry.promote(PASSING_INC["hash"], 3, None, "seed the pointer", state_dir=tmp)
+        registry.promote(PASSING_CAND["hash"], 4, good, "gates passed", state_dir=tmp)
+        h, meta = registry.champion(tmp)
+        rows = registry.champion_history(tmp)
+        refused = False
+        try:
+            registry.promote("nevernevernev", 5, bad, state_dir=tmp)
+        except ValueError:
+            refused = True
+        registry.rollback(PASSING_INC["hash"], "verify rollback", state_dir=tmp)
+        back, _m = registry.champion(tmp)
+        after = registry.champion_history(tmp)
+        check("an all-pass report promotes, a failing one is refused, rollback restores",
+              h == PASSING_CAND["hash"] and meta["previous_hash"] == PASSING_INC["hash"]
+              and len(rows) == 2 and refused and back == PASSING_INC["hash"]
+              and len(after) == 3 and after[-1]["reason"] == "rollback",
+              "%d pointer moves, each with a history row; failing report refused: %s"
+              % (len(after), refused))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ── the two F2 inputs whose rules are not obvious from their signatures ────
+    # A series that covers the 2000-02 and 2008-09 windows and stops long before
+    # the two vault-era ones: exactly the shape a pre-vault-only evaluation has.
+    dates = pd.bdate_range("1999-01-04", periods=3000)      # ends 2010: no 2020, no 2022
+    net = np.full(len(dates), 0.0002)
+    vals = evaluate.regime_slices(net, dates)
+    days = evaluate.regime_slice_days(dates)
+    absent = [i for i, v in enumerate(vals) if np.isnan(v)]
+    rep = gates.evaluate_gates(dict(PASSING_CAND, regime_slices=vals), PASSING_INC)
+    check("G8 passes by absence: an uncovered window is NaN, and NaN is not a failure",
+          absent == [2, 3] and days[2] == 0 and days[3] == 0 and rep["gates"]["G8"]["pass"],
+          "windows %s uncovered by a series ending %s; G8 %s"
+          % (absent, dates[-1].date(), rep["gates"]["G8"]["detail"]))
+    hard = list(vals)
+    hard[0] = config.GATE_REGIME_MAX_LOSS - 0.01
+    check("...but a COVERED window below the floor still fails G8",
+          not gates.evaluate_gates(dict(PASSING_CAND, regime_slices=hard),
+                                   PASSING_INC)["gates"]["G8"]["pass"],
+          "slice 0 at %.0f%% (floor %.0f%%)"
+          % (100 * hard[0], 100 * config.GATE_REGIME_MAX_LOSS))
+
+    rng_net = np.random.default_rng(config.SEED).normal(0.0006, 0.01, 1200)
+    ci_a = evaluate.bootstrap_sharpe_ci(rng_net, n=400, rng=np.random.default_rng(99))
+    ci_b = evaluate.bootstrap_sharpe_ci(rng_net, n=400, rng=np.random.default_rng(99))
+    ci_c = evaluate.bootstrap_sharpe_ci(rng_net, n=400, rng=np.random.default_rng(100))
+    check("the bootstrap CI is reproducible from a fixed rng (and only from it)",
+          ci_a == ci_b and ci_a != ci_c and ci_a[0] < ci_a[1],
+          "same seed [%+.3f, %+.3f] twice; a different seed gives [%+.3f, %+.3f]"
+          % (ci_a[0], ci_a[1], ci_c[0], ci_c[1]))
+    short = evaluate.bootstrap_sharpe_ci(rng_net[:config.SHARPE_MIN_OBS - 1], n=100,
+                                         rng=np.random.default_rng(1))
+    check("...and a series too short to have a Sharpe returns NaN, which fails G6",
+          all(np.isnan(v) for v in short)
+          and not gates.evaluate_gates(dict(PASSING_CAND, boot_ci_lo=short[0]),
+                                       PASSING_INC)["gates"]["G6"]["pass"],
+          "%d observations -> (nan, nan)" % (config.SHARPE_MIN_OBS - 1))
+
+
 # ── 8. trial ledger ────────────────────────────────────────────────────────────
 def test_trial_ledger():
     """DESIGN check 8. The ledger is the input to every multiple-testing
@@ -1298,6 +1498,7 @@ def main() -> int:
     test_fill_timing()
     test_streaming_purge()
     test_cost_linearity()
+    test_gates()
     test_trial_ledger()
     test_genome_ops()
     test_no_wallclock()
