@@ -91,13 +91,6 @@ jobs:
                     % (len(paths), max(gens), keep, len(dropped)))
           PY
 
-      # TEMPORARY (removed in the next commit): proves the job-level secrets reach
-      # a step AFTER the run step, which is the whole point of hoisting them —
-      # the commit-back step below has to be able to alert when it gives up.
-      # Prints channel NAMES only; no credential value is ever read into a log.
-      - name: PROBE — which alert channels resolve this late in the job
-        run: python alerts_arena.py --channels
-
       - name: Commit state back
         run: |
           set -uo pipefail
