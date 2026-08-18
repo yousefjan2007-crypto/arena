@@ -262,6 +262,51 @@ def _tolerance_gate(path: str, cached: bytes, tol: float) -> dict:
             "dropped": len(dropped), "max_rel": worst}
 
 
+def new_refresh_stat(n_wanted: int = 0) -> dict:
+    """The empty tally refresh_cache accumulates into.
+
+    Two maxima, never one: the largest drift among the files that were KEPT is the
+    measurement that says the tolerance is set sensibly, and folding a restated
+    symbol's much larger drift into it would report a number ABOVE the tolerance
+    under a label claiming everything stayed below it.
+    """
+    return {"wanted": int(n_wanted), "ok": 0, "empty": 0, "error": 0,
+            "unchanged": 0, "appended": 0, "restated": 0, "new": 0,
+            "bars_added": 0, "rows_restated": 0, "max_rel_kept": 0.0,
+            "max_rel_restated": 0.0, "restated_symbols": [],
+            "shape_changed": 0, "shape_symbols": []}
+
+
+def note_decision(stat: dict, symbol: str, d: dict) -> dict:
+    """Fold one _tolerance_gate decision into the tally. Pure; verify.py calls it.
+
+    `inf` is the row-SHAPE anomaly (a column appeared or vanished), not a measured
+    drift, and it never reaches either maximum. Coercing it to 0.0 there — which
+    this function used to do inline — reported the loudest event the gate can see
+    as the quietest one.
+    """
+    shape_change = d["max_rel"] == float("inf")
+    worst = 0.0 if shape_change else d["max_rel"]
+    if shape_change:
+        stat["shape_changed"] += 1
+        stat["shape_symbols"].append(symbol)
+    if d["action"] == "unchanged":
+        stat["unchanged"] += 1
+        stat["max_rel_kept"] = max(stat["max_rel_kept"], worst)
+    elif d["action"] == "appended":
+        stat["appended"] += 1
+        stat["bars_added"] += d["added"]
+        stat["max_rel_kept"] = max(stat["max_rel_kept"], worst)
+    elif d["action"] == "new-file":
+        stat["new"] += 1
+    else:
+        stat["restated"] += 1
+        stat["rows_restated"] += d["restated"]
+        stat["restated_symbols"].append(symbol)
+        stat["max_rel_restated"] = max(stat["max_rel_restated"], worst)
+    return stat
+
+
 def refresh_cache(symbols, verbose=True) -> dict:
     """Re-download the price cache for `symbols` + the macro tickers. Network!
 
@@ -288,15 +333,7 @@ def refresh_cache(symbols, verbose=True) -> dict:
     macro = config.import_sibling("macro", config.SIGNAL_LAB)
     wanted = list(dict.fromkeys(list(symbols) + list(macro.MACRO_TICKERS.values())))
     tol = float(config.REFRESH_REL_TOL)
-    # Two maxima, never one: the largest drift among the files that were KEPT is
-    # the measurement that says the tolerance is set sensibly, and mixing a
-    # restated symbol's much larger drift into it would report a number above the
-    # tolerance under a label claiming everything stayed below it.
-    stat = {"wanted": len(wanted), "ok": 0, "empty": 0, "error": 0,
-            "unchanged": 0, "appended": 0, "restated": 0, "new": 0,
-            "bars_added": 0, "rows_restated": 0, "max_rel_kept": 0.0,
-            "max_rel_restated": 0.0, "restated_symbols": [],
-            "shape_changed": 0, "shape_symbols": []}
+    stat = new_refresh_stat(len(wanted))
     with _force_fetch():
         for sym in wanted:
             path = datafeed._cache_path(sym)                        # noqa: SLF001
@@ -318,30 +355,7 @@ def refresh_cache(symbols, verbose=True) -> dict:
             stat["ok"] += 1
             if not os.path.exists(path):
                 continue                        # fetch succeeded but wrote nothing
-            d = _tolerance_gate(path, cached, tol)
-            # inf is the row-shape anomaly (a column appeared or vanished), NOT a
-            # measured drift. Coercing it to 0.0 for the arithmetic below would
-            # report the loudest event this gate can see as the quietest, so it is
-            # kept out of the maxima and counted on its own.
-            shape_change = d["max_rel"] == float("inf")
-            worst = 0.0 if shape_change else d["max_rel"]
-            if shape_change:
-                stat["shape_changed"] += 1
-                stat["shape_symbols"].append(sym)
-            if d["action"] == "unchanged":
-                stat["unchanged"] += 1
-                stat["max_rel_kept"] = max(stat["max_rel_kept"], worst)
-            elif d["action"] == "appended":
-                stat["appended"] += 1
-                stat["bars_added"] += d["added"]
-                stat["max_rel_kept"] = max(stat["max_rel_kept"], worst)
-            elif d["action"] in ("new-file",):
-                stat["new"] += 1
-            else:
-                stat["restated"] += 1
-                stat["rows_restated"] += d["restated"]
-                stat["restated_symbols"].append(sym)
-                stat["max_rel_restated"] = max(stat["max_rel_restated"], worst)
+            note_decision(stat, sym, _tolerance_gate(path, cached, tol))
     if verbose:
         print("  refresh   : %d symbols fetched (%d empty, %d errored) into %s"
               % (stat["ok"], stat["empty"], stat["error"],

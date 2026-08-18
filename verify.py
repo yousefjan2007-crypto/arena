@@ -1435,6 +1435,102 @@ def test_trial_ledger():
         check("returns matrix refuses vault days", refused,
               "a %s..%s window is rejected before it can be written"
               % (dates[0].date(), dates[-1].date()))
+
+        # ── the union-merge repair ────────────────────────────────────────────
+        # .gitattributes gives state/*.csv git's union merge driver, because these
+        # files are EOF-appended and the default driver turns every two-writer
+        # append into a conflict an unattended runner cannot resolve — and an
+        # unresolvable conflict costs a whole session's ledger rows. Union's price
+        # is that a line both sides appended can survive twice, and that a HEADER
+        # can be carried down mid-file when both sides created the file.
+        #
+        # Both are repaired at startup, and both have to be, for different reasons:
+        # a duplicate row inflates n_trials (which deflates DSR — wrong direction,
+        # but conservative), while a repeated header makes pandas read the column
+        # names as data and silently degrades every numeric column to dtype object.
+        path = ledger.ledger_path()
+        original = open(path).read().splitlines()
+        header, body = original[0], original[1:]
+        merged = [header] + body[:3] + [header] + body[3:] + [body[-1]]   # 1 header + 1 dup
+        with open(path, "w") as f:
+            f.write("\n".join(merged) + "\n")
+        before_dtype = pd.read_csv(path)["generation"].dtype
+        removed = ledger.dedup_ledger(verbose=False)
+        after = open(path).read().splitlines()
+        after_dtype = pd.read_csv(path)["generation"].dtype
+        check("dedup_ledger removes a union merge's duplicate row AND repeated header",
+              removed == 2 and after == original
+              and after.count(header) == 1 and len(after) == len(original),
+              "%d line(s) removed from a %d-line merged file; %d rows restored "
+              "byte-for-byte, header appears %d time(s)"
+              % (removed, len(merged), len(after) - 1, after.count(header)))
+        check("...and the repaired ledger reads back with numeric dtypes",
+              before_dtype == object and after_dtype != object,
+              "generation dtype %s before the repair (every numeric column degraded, "
+              "and n_trials would count a row that is not a trial) -> %s after"
+              % (before_dtype, after_dtype))
+        check("dedup_ledger is a no-op on a clean ledger",
+              ledger.dedup_ledger(verbose=False) == 0
+              and open(path).read().splitlines() == original,
+              "nothing removed on the second pass; an append-only file is only ever "
+              "rewritten when a merge actually damaged it")
+
+        # A row differing in ANY column is a different evaluation and must survive:
+        # only byte-identical rows are merge artifacts.
+        near = body[-1].rsplit(",", 1)[0] + ",99"
+        with open(path, "w") as f:
+            f.write("\n".join(original + [near]) + "\n")
+        check("a near-duplicate row is NOT removed",
+              ledger.dedup_ledger(verbose=False) == 0
+              and len(open(path).read().splitlines()) == len(original) + 1,
+              "one column differs, so it is a different evaluation and stays")
+        with open(path, "w") as f:
+            f.write("\n".join(original) + "\n")
+        ledger.forget_cache()
+
+        # ── the refresh tolerance gate's shape anomaly ────────────────────────
+        # A refetch that comes back with a different row SHAPE (a column appeared
+        # or vanished) has no numeric drift at all. The gate says so with inf, and
+        # the tally must keep that out of both maxima: folding it in as 0.0 would
+        # report the loudest event this gate can see as the quietest one.
+        cache_tmp = tempfile.mkdtemp(prefix="arena_verify_tolgate_")
+        try:
+            csv_path = os.path.join(cache_tmp, "X.csv")
+            cached = b"date,open,close\n2020-01-02,1.0,1.0\n2020-01-03,2.0,2.0\n"
+            with open(csv_path, "wb") as f:
+                f.write(cached)
+            with open(csv_path, "w") as f:                 # the refetch grew a column
+                f.write("date,open,close\n2020-01-02,1.0,1.0\n2020-01-03,2.0,2.0,9.0\n")
+            d = run_generation._tolerance_gate(          # noqa: SLF001
+                csv_path, cached, config.REFRESH_REL_TOL)
+            stat = run_generation.note_decision(run_generation.new_refresh_stat(1), "X", d)
+            check("a changed row shape reports shape-changed, never a drift of 0.0",
+                  d["action"] == "accept-shape" and d["max_rel"] == float("inf")
+                  and stat["shape_changed"] == 1 and stat["shape_symbols"] == ["X"]
+                  and stat["max_rel_kept"] == 0.0 and stat["max_rel_restated"] == 0.0,
+                  "action=%s max_rel=%s -> shape_changed=%d, and it stays out of both "
+                  "maxima (kept %.2e, restated %.2e) rather than being logged as 0.0"
+                  % (d["action"], d["max_rel"], stat["shape_changed"],
+                     stat["max_rel_kept"], stat["max_rel_restated"]))
+
+            # The ordinary branches still reach the right maximum, so the exclusion
+            # above is specific to the anomaly and not a hole.
+            kept = run_generation.note_decision(
+                run_generation.new_refresh_stat(1), "Y",
+                {"action": "unchanged", "max_rel": 3.15e-07, "restated": 0, "added": 0})
+            restated = run_generation.note_decision(
+                run_generation.new_refresh_stat(1), "Z",
+                {"action": "restated", "max_rel": 2e-02, "restated": 7, "added": 0})
+            check("...while a kept file and a restated one land in separate maxima",
+                  kept["max_rel_kept"] == 3.15e-07 and kept["max_rel_restated"] == 0.0
+                  and restated["max_rel_restated"] == 2e-02
+                  and restated["max_rel_kept"] == 0.0
+                  and restated["restated_symbols"] == ["Z"],
+                  "sub-tolerance drift %.2e -> max_rel_kept; a %.0e restatement -> "
+                  "max_rel_restated, never mixed into one number"
+                  % (kept["max_rel_kept"], restated["max_rel_restated"]))
+        finally:
+            shutil.rmtree(cache_tmp, ignore_errors=True)
     finally:
         config.STATE_DIR = saved
         ledger.forget_cache()
