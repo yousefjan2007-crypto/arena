@@ -86,8 +86,26 @@ CHAMPION_NOTE = ("REWRITTEN on every promotion or rollback: this is the champion
                  "POINTER, not a record. Every rewrite appends a row to "
                  "champion_history.csv, and the artifact it points at is immutable.")
 METRICS_NOTE = ("MERGE-APPEND only: an evaluation is filed under its own eval key "
-                "(generation + data/panel/config hash) and existing keys are never "
-                "rewritten. See registry.py's docstring.")
+                "(schema version + generation + data/panel/config hash) and existing "
+                "keys are never rewritten. See registry.py's docstring.")
+
+# The SHAPE of an eval record, not its numbers. Bump it in the same commit as any
+# change to what store_artifact puts in `record` below.
+#
+# WHY IT IS IN THE KEY. The eval key promises "two evaluations sharing this key
+# must agree number for number", and a record-shape change breaks that promise
+# without changing a single number: the old record and the new one differ, so
+# _plan_metrics raises ImmutableArtifact and a weekly job stops until a human
+# moves files aside by hand. That happened once already — Phase 5 added
+# `ledger_drift` and had to preserve artifacts/genomes.schema_pre_ledger_drift/ —
+# and config_hash cannot prevent it, because config.py says of itself that it
+# "cannot see a CODE change". So the schema version rides in the tag, which
+# exists precisely for "something outside (generation, identity) that the record
+# depends on". A schema change now files as a NEW evaluation beside the old one,
+# which is what it is.
+#   1  Phase 5 and earlier (unversioned keys — no `s<N>.` prefix)
+#   2  filed_seq added (Phase 6)
+METRICS_SCHEMA = 2
 
 
 class ImmutableArtifact(RuntimeError):
@@ -192,9 +210,14 @@ def eval_key(generation: int, identity, tag: str = "") -> str:
     the counts its numbers depend on in here, so a second look is filed as a
     second evaluation instead of colliding with the first. Numbers that depend on
     NOTHING but the market never need it.
+
+    The record SCHEMA version leads the tag, always (see METRICS_SCHEMA): a
+    reshaped record is a different record, and it must not collide with the old
+    shape under the same key.
     """
     parts = (int(generation),) + tuple(str(v) for v in identity)
-    return "%04d|%s|%s|%s" % parts + ("|%s" % tag if tag else "")
+    stamped = "s%d%s" % (METRICS_SCHEMA, "." + tag if tag else "")
+    return "%04d|%s|%s|%s" % parts + "|%s" % stamped
 
 
 def _key8(key: str) -> str:
@@ -288,6 +311,35 @@ def _plan_genome(path: str, entry: dict):
     return _json_bytes(payload)
 
 
+def _filed_seq(evals: dict) -> int:
+    """The next filing sequence number for this artifact.
+
+    WHY A COUNTER AND NOT THE KEY ORDER. "Which of these evaluations is the most
+    recent" has no answer in the file itself: metrics.json is written with
+    sort_keys=True, so read-back order is LEXICOGRAPHIC, and the eval key ends in
+    the trial counts the record's DSRs were deflated by. `trials9.vault3` sorts
+    above `trials21.vault2`, so key order ranks an EARLIER, LESS DEFLATED record
+    as the latest — and a report quoting it would be quoting the more flattering
+    of two numbers while calling it the newest. So filing order is recorded
+    explicitly, at store time, and readers take the max.
+
+    Monotonic per artifact, assigned only to records that are actually new (see
+    _plan_metrics), so a re-store stays the byte-identical no-op it has to be.
+    """
+    return 1 + max([int(v.get("filed_seq", 0)) for v in evals.values()] or [0])
+
+
+def _same_record(a: dict, b: dict) -> bool:
+    """Record equality for the immutability guard, ignoring the filing counter.
+
+    filed_seq is bookkeeping the STORE assigns, not a measurement the caller
+    supplies, so comparing it would make every re-store look like a conflict and
+    turn the idempotent no-op into a raise.
+    """
+    return {k: v for k, v in a.items() if k != "filed_seq"} == \
+           {k: v for k, v in b.items() if k != "filed_seq"}
+
+
 def _plan_metrics(path: str, ghash: str, key: str, record: dict):
     """metrics.json — merge-append on the eval key (see the module docstring).
     Returns the payload to write, or None when this evaluation is already filed.
@@ -298,7 +350,7 @@ def _plan_metrics(path: str, ghash: str, key: str, record: dict):
         payload.setdefault("evals", {})
     prior = payload["evals"].get(key)
     if prior is not None:
-        if prior == record:
+        if _same_record(prior, record):
             return None
         raise ImmutableArtifact(
             "metrics.json for %s already holds different numbers under eval key\n"
@@ -306,7 +358,7 @@ def _plan_metrics(path: str, ghash: str, key: str, record: dict):
             "Same generation, same data, same panel, same settings — so the two "
             "results should be identical and one of them is wrong. Nothing was "
             "written: %s" % (ghash, key, path))
-    payload["evals"][key] = record
+    payload["evals"][key] = dict(record, filed_seq=_filed_seq(payload["evals"]))
     payload["note"] = METRICS_NOTE
     return _json_bytes(payload)
 

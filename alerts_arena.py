@@ -257,6 +257,12 @@ def deepeval_summary(generation: int, candidates, promoted=None, champion_before
     """
     if promoted:
         title = "arena deep eval gen %d: PROMOTED %s" % (generation, promoted)
+    elif status == "nothing-to-evaluate":
+        # NOT a refusal. Nothing was put to the gates, so nothing was turned down,
+        # and a title saying "REFUSED — 0 candidates" would report a decision that
+        # was never made.
+        title = ("arena deep eval gen %d: nothing to evaluate — no decision made"
+                 % generation)
     elif status == "incomplete":
         title = "arena deep eval gen %d: INCOMPLETE — nothing promoted" % generation
     else:
@@ -290,6 +296,33 @@ def deepeval_summary(generation: int, candidates, promoted=None, champion_before
     return title, "\n".join(lines)
 
 
+def push_failure_summary(job: str, attempts: int, ref: str = "", run_url: str = "") -> tuple:
+    """A cloud session that computed real work and could not push it home.
+
+    Loud by construction and NOT subject to the anti-spam: the repository is the
+    only place an Actions runner's work survives, so a failed push means ledger
+    rows for evaluations that actually happened have been lost. "Every genome
+    evaluation of any fidelity appends to the trial ledger" is a constraint of
+    this project — a silent violation of it is the worst outcome available here,
+    because the lost rows are what deflate every Sharpe the system reports.
+    """
+    title = "arena %s: STATE NOT PUSHED after %d attempts" % (job, attempts)
+    body = "\n".join([
+        "The run completed and could not push its state back%s."
+        % (" to %s" % ref if ref else ""),
+        "",
+        "The runner is ephemeral, so that work is GONE: any trial-ledger rows it "
+        "wrote are lost, and n_trials() is now lower than the number of genomes "
+        "this search has actually looked at — which makes every deflated Sharpe "
+        "reported from here optimistic until those genomes are evaluated again.",
+        "",
+        "They will be: the ledger is idempotent on (genome, generation, fidelity), "
+        "so re-running the generation re-appends them. Nothing on the remote is "
+        "wrong; it is only missing.",
+    ] + (["", "Run log: %s" % run_url] if run_url else []) + ["", HONESTY_LINE])
+    return title, body
+
+
 def data_stale_summary(cache_age: float, bar_age: float, last_bar, limit: int,
                        job: str = "generation") -> tuple:
     """The abort DESIGN asks for by name: 'abort with alert if staleness > 5 days'."""
@@ -305,7 +338,27 @@ def data_stale_summary(cache_age: float, bar_age: float, last_bar, limit: int,
 
 
 if __name__ == "__main__":
+    import argparse
     import tempfile
+
+    ap = argparse.ArgumentParser(description="arena alert smoke / push-failure notice")
+    ap.add_argument("--push-failed", action="store_true",
+                    help="compose and deliver the commit-back failure notice "
+                         "(the workflows call this when the push loop gives up)")
+    ap.add_argument("--job", default="generation", help="which job failed to push")
+    ap.add_argument("--attempts", type=int, default=3)
+    ap.add_argument("--ref", default="")
+    ap.add_argument("--run-url", default="")
+    ap.add_argument("--send", action="store_true", help="deliver; default is dry")
+    _args = ap.parse_args()                                          # io-boundary
+
+    if _args.push_failed:
+        _t, _b = push_failure_summary(_args.job, _args.attempts, _args.ref, _args.run_url)
+        # send_all, not send_transition: a lost session is never "the same state as
+        # last time", and the state file it would consult is on the disk that is
+        # about to be discarded.
+        send_all(_t, _b, dry_run=not _args.send)
+        raise SystemExit(0)
 
     print("arena alerts")
     creds = credentials()

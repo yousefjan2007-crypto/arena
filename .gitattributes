@@ -1,0 +1,30 @@
+# The append-only state CSVs get git's UNION merge driver.
+#
+# WHY. Every one of these files is written by EOF append, and two writers append
+# different rows to the same last line — a Mac booster and a cloud runner, or two
+# runners either side of a queued schedule. The default merge driver reports that
+# as a conflict on every single occasion, and an Actions runner has no human to
+# resolve it: the commit-back retry aborts the rebase, retries, conflicts
+# identically, and after three attempts throws away the whole session INCLUDING
+# the ledger rows for evaluations that actually happened. "Every genome evaluation
+# of any fidelity appends to the trial ledger" is a constraint of this project, so
+# a merge policy that can silently drop those rows is not acceptable.
+#
+# Union keeps BOTH sides' lines, which for an append-only log is the correct
+# resolution and not a compromise.
+#
+# THE COST, AND WHO PAYS IT. Union can leave the same line twice when both sides
+# appended byte-identical rows. For the trial ledger that is always a merge
+# artifact — its writer is idempotent on (generation, genome_hash, fidelity), so
+# two identical rows can never be two real evaluations — and run_generation and
+# run_deepeval dedup it at startup, loudly. The other three files are NOT deduped
+# on purpose: two identical vault_access rows are two real looks at the vault,
+# two identical deepeval_history rows are two real runs, and collapsing either
+# would make a DSR optimistic, which is the one direction this project is not
+# allowed to be wrong in. Over-counting is the safe side of that trade.
+state/*.csv merge=union
+
+# The returns matrices and artifacts are binary and content-addressed; a conflict
+# on one is a real disagreement about content and must not be auto-resolved.
+state/returns/*.npz -merge -diff
+artifacts/**/*.gz   -merge -diff

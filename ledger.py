@@ -106,6 +106,62 @@ def read_ledger(state_dir=None) -> pd.DataFrame:
                                     "config_hash": str})
 
 
+def dedup_ledger(state_dir=None, verbose=True) -> int:
+    """Drop EXACT duplicate rows from the trial ledger. Returns the count removed.
+
+    THE ONLY THING THAT CAN CREATE ONE IS A MERGE. .gitattributes gives
+    `state/*.csv` git's union merge driver, because these files are EOF-appended
+    and the default driver turns every two-writer append into a conflict that an
+    unattended runner cannot resolve — and an unresolvable conflict costs a whole
+    session's ledger rows, which is worse than any duplicate. Union's price is
+    that a line both sides appended can survive twice.
+
+    For THIS file that price is safe to refund. record_trial is idempotent on
+    (genome_hash, generation, fidelity) and refuses a second row for the same key,
+    so two byte-identical rows cannot be two real evaluations; one of them is a
+    merge artifact. Only exact duplicates go — a row differing in any column, even
+    one hash character, is a different evaluation and stays.
+
+    THE OTHER THREE STATE CSVs ARE DELIBERATELY NOT DEDUPED. Two identical
+    vault_access rows are two real looks at the vault; two identical
+    deepeval_history rows are two real runs; two identical champion_history rows
+    are two real pointer moves. Collapsing any of them would UNDER-count, and
+    under-counting vault looks makes every deflated Sharpe optimistic — the one
+    direction this project may not be wrong in. Over-counting is the safe side.
+
+    Rewrites the file only when something is removed. That is a rewrite of an
+    append-only file, so it is loud, it is bounded to exact duplicates, and it
+    preserves the order of every surviving row.
+    """
+    path = ledger_path(state_dir)
+    if not os.path.exists(path):
+        return 0
+    with open(path, newline="") as f:
+        lines = f.read().splitlines()
+    if len(lines) < 2:
+        return 0
+    header, seen, kept = lines[0], set(), []
+    for line in lines[1:]:
+        if line in seen:
+            continue
+        seen.add(line)
+        kept.append(line)
+    removed = (len(lines) - 1) - len(kept)
+    if not removed:
+        return 0
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="") as f:
+        f.write("\n".join([header] + kept) + "\n")
+    os.replace(tmp, path)
+    forget_cache()
+    if verbose:
+        print("  ledger    : removed %d exact duplicate row(s) left by a union merge "
+              "(%d rows remain). Only byte-identical rows were dropped; record_trial "
+              "is idempotent on (genome, generation, fidelity), so a duplicate cannot "
+              "be a second real evaluation." % (removed, len(kept)))
+    return removed
+
+
 def _keys(path: str) -> set:
     if path not in _KEY_CACHE:
         keys = set()

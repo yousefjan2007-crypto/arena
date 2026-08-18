@@ -559,6 +559,10 @@ def main() -> int:
     deadline = t_start + args.budget_min * 60.0                     # io-boundary
     print("arena weekly deep evaluation%s" % ("  (DRY RUN)" if args.dry else ""))
 
+    # Before any gate reads the ledger: a union merge (see .gitattributes) can
+    # leave a row twice, and G2/G3 are deflated by exactly that count.
+    ledger.dedup_ledger()
+
     market, n_wanted = load_market()
     cache_age, bar_age = run_generation.data_staleness(market)
     if max(cache_age, bar_age) > config.MAX_DATA_STALENESS_DAYS:

@@ -68,8 +68,16 @@ jobs:
           # trade for a repo carrying ~78 MB of price CSVs — but a shallow repo
           # cannot rebase onto a tip it has no ancestor for, so deepen first and
           # fall back to a plain fetch when there is nothing left to deepen.
+          # Deepen by 5 and escalate: the common case is one or two commits behind,
+          # and this repo is large enough that a needlessly deep fetch is self-harm.
+          #
+          # The rebase itself is expected to SUCCEED even when both sides appended,
+          # because .gitattributes gives state/*.csv git's union merge driver. That
+          # is load-bearing: without it every two-writer append conflicts, --abort
+          # restores the same conflict, all three attempts fail identically, and an
+          # ephemeral runner discards a whole session's ledger rows.
           for i in 1 2 3; do
-            git fetch --deepen=50 origin "${GITHUB_REF_NAME}" \
+            git fetch --deepen=$((5 * i)) origin "${GITHUB_REF_NAME}" \
               || git fetch origin "${GITHUB_REF_NAME}" || true
             git rebase "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
             if git push origin "HEAD:${GITHUB_REF_NAME}"; then
@@ -79,5 +87,11 @@ jobs:
             echo "push attempt ${i} failed; retrying"
             sleep $((10 * i))
           done
-          echo "could not push after 3 attempts — the decision is in the run log."
-          exit 1
+          # Exit 75 (EX_TEMPFAIL), distinct from the 1 an arena failure uses, so a
+          # lost session is never mistaken for a bad evaluation — and never silent.
+          echo "could not push after 3 attempts; the decision this session made is lost"
+          python alerts_arena.py --push-failed --job "deep eval" --attempts 3 \
+            --ref "${GITHUB_REF_NAME}" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --send || echo "(the failure alert could not be delivered either)"
+          exit 75

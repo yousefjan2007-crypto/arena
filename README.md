@@ -122,10 +122,21 @@ public runner checks out one repository and has neither, so the seven modules
 the import graph actually reaches are copied under `vendor/`, byte-identical
 below a provenance header. `config.py` imports the live checkouts when they
 exist and the vendored copies otherwise; `ARENA_FORCE_VENDOR=1` forces the
-vendored path on a machine that has both, which is how the two are kept honest:
+vendored path on a machine that has both.
+
+The standing proof that the runner runs this code is a **byte comparison**:
+`python3 config.py` compares every file under `vendor/` against its source and
+says so. `python3 features.py` adds an end-to-end check — both modes must build
+the same feature panel, compared by `panel_hash` — but that one is **conditional
+on the two caches holding the same data vintage**, and they only do until the
+first cloud refresh. yfinance restates its whole adjusted history on every fetch,
+so the sibling cache and arena's committed `data/cache` diverge for real reasons;
+once they have, the check reports `NOT COMPARABLE` with both data hashes rather
+than a failure that would say nothing about the code.
 
 ```bash
-python3 features.py            # asserts live panel_hash == vendored panel_hash
+python3 config.py              # byte-compares every vendored file (always valid)
+python3 features.py            # panel_hash parity, while the caches agree
 ARENA_FORCE_VENDOR=1 python3 verify.py
 ```
 
@@ -150,6 +161,15 @@ once per trading day, so beyond about two generations a day the extra runs
 mostly inflate the trial count — which *deflates* every deflated Sharpe — without
 exploring meaningfully more. Both scheduled workflows share one concurrency
 group so they can never overlap on state.
+
+One consequence of that group is worth knowing: **GitHub keeps only one pending
+run per concurrency group.** If a run is executing and two more are triggered,
+the first of those waits and the second silently *replaces* it — the replaced run
+is cancelled before it starts and never appears as a failure. A generation can
+therefore be skipped without anything looking wrong. It is harmless by design
+(nothing is lost, the next run resumes or moves on) but it means the run count
+is not a reliable measure of how many generations were attempted; the trial
+ledger is.
 
 Alerts go to Telegram/ntfy through repo secrets. Nothing sensitive is in the
 repository; `config.local.json` is gitignored and no credential is ever printed,

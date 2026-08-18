@@ -271,6 +271,13 @@ SHARPE_MIN_OBS = 60
 TRIAL_SR_STD_MIN_ROWS = 8
 # run_generation refuses to evaluate on a cache older than this (calendar days).
 MAX_DATA_STALENESS_DAYS = 5
+# Tolerance gate on cache writes (run_generation._tolerance_gate). yfinance
+# recomputes its whole auto-adjusted history in reduced precision on every fetch,
+# so a refetch with no new bar still restates every row by ~3e-7 relative. Below
+# this bound the CACHED bytes are kept; above it, a real adjustment event has
+# happened and the restatement is accepted whole. 1e-5 sits two orders above the
+# jitter and orders below any real split or dividend adjustment.
+REFRESH_REL_TOL = 1e-5
 
 # Genome operators (docs/DESIGN.md "Operators"). These are INDEPENDENT per-move
 # probabilities, not a distribution — they sum past 1 on purpose, so one child can
@@ -384,10 +391,20 @@ EXECUTION_MODE = "sandbox"
 # fast, not what), the invariant-assertion toggle (it can only raise, never change
 # a number), sell_in_may's own knobs, and anything not JSON-scalar-shaped. It also
 # cannot see a CODE change — that is git's job, not this hash's.
+#
+# Nor does it cover a knob whose whole effect is ALREADY RECORDED IN data_hash.
+# This digest exists to catch settings that change results INVISIBLY; a setting
+# that can only change which bars land in the cache is visible by construction,
+# because data_hash is computed from the bars actually used and is stamped on
+# every ledger row, artifact and history row. REFRESH_REL_TOL is the one such
+# knob (RETURNS_KEEP_GENERATIONS is the weaker case: it deletes files nothing
+# reads). The alternative — digesting it — would invalidate like-for-like against
+# every row on record to describe a difference those rows already carry.
 _CONFIG_HASH_SKIP = frozenset({
     "STATE_DIR", "ARTIFACT_DIR", "OUTPUT_DIR", "DATA_DIR",   # where files live
     "N_JOBS", "GEN_TIME_BUDGET_MIN", "DEEPEVAL_TIME_BUDGET_MIN",   # how fast, not what
     "RETURNS_KEEP_GENERATIONS",                     # what is kept, not what was computed
+    "REFRESH_REL_TOL",                              # already visible in data_hash (above)
     "ENV_CHECK_INVARIANTS",                         # asserts, never arithmetic
 })
 # Inherited, never redeclared here, but the simulation reads them. (SEED is also

@@ -130,6 +130,15 @@ Everything in `state/`+`artifacts/` is append-only or immutable; only
 `champion.json` (a pointer) is rewritten, and every rewrite is appended to
 `champion_history.csv`.
 
+Two further files are sanctioned rewritable non-records, for the same reason
+`champion.json` is: they are caches of a current position, not evidence.
+`population.json` is the generation pointer (every genome in it was ledgered when
+it was evaluated), and `state/alert_state.json` holds the last alert state
+delivered per kind, so a re-triggered cloud run does not re-announce a state
+nobody's phone needs twice. Neither is a decision; the trial ledger,
+`deepeval_history.csv` and `champion_history.csv` are where decisions live, and
+those stay append-only.
+
 Key `config.py` defaults (all thresholds live here — no hidden module
 constants): `SEED=12345`; `DATA_START="1995-01-01"`; `UNIVERSE_SIZE=120`;
 `VAULT_START="2020-01-01"`; `START_CASH=15_000` (mid of user's $10–25K,

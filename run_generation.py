@@ -146,6 +146,113 @@ def _force_fetch():
         config.CACHE_MAX_AGE_DAYS = saved
 
 
+def _rel_diff(a: float, b: float) -> float:
+    """|a-b| relative to the larger magnitude. 0 vs 0 is 0, not a division."""
+    scale = max(abs(a), abs(b))
+    if scale == 0.0:
+        return 0.0
+    return abs(a - b) / scale
+
+
+def _parse_cache_lines(payload: bytes) -> tuple:
+    """(header, {date: (raw line, [floats])}) for a cache CSV, or (None, {})."""
+    try:
+        text = payload.decode()
+    except Exception:
+        return None, {}
+    lines = text.splitlines()
+    if not lines:
+        return None, {}
+    rows = {}
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        parts = line.split(",")
+        try:
+            rows[parts[0]] = (line, [float(v) if v != "" else float("nan")
+                                     for v in parts[1:]])
+        except ValueError:
+            return None, {}                 # unparseable: treat the file as opaque
+    return lines[0], rows
+
+
+def _tolerance_gate(path: str, cached: bytes, tol: float) -> dict:
+    """Keep the CACHED bytes for every row the refetch did not really change.
+
+    THE PROBLEM THIS SOLVES. yfinance recomputes its entire auto-adjusted history
+    in reduced precision on every fetch, so a refetch minutes later — with no new
+    bar, no dividend, nothing — restates every row by ~3e-7 relative. Measured on
+    the first two cloud runs, 75 minutes apart: 13,114 of AAPL's 15,918 lines
+    changed, and the whole 78 MB cache was rewritten twice a day. At the scheduled
+    cadence that is repository growth measured in gigabytes per year, for a
+    difference no computation in this project can resolve.
+
+    THE RULE. Every date present in both the cached and the fetched frame is
+    compared column by column. If EVERY shared row agrees within `tol` relative,
+    the cached bytes are kept verbatim (full precision, not rounded — rounding
+    would only move the jitter to a different boundary) and only genuinely new
+    dates are appended, taken verbatim from the fetch. If ANY row exceeds `tol`, a
+    real adjustment event has happened — a split, a dividend, a vendor correction —
+    and the fetched file is accepted whole and the event is logged loudly.
+
+    Rows the fetch DROPPED are kept from the cache and counted: a short fetch is a
+    bad data day, and this project's stated posture is that a bad data day degrades
+    to stale-cache rather than to loss.
+
+    WHAT THIS IS NOT. It is not an attempt at permanent cross-machine byte parity.
+    Two machines that refresh at different times will each cross an adjustment
+    event on their own schedule and restate independently, so their caches diverge
+    for real reasons and stay diverged. The doctrine is unchanged: results are
+    per-platform, the cloud is canonical, and `data_hash` on every row records
+    exactly which bytes a result was produced from.
+
+    Returns a decision dict; writes `path` only when it has something better to
+    put there.
+    """
+    with open(path, "rb") as f:
+        fetched = f.read()
+    if not cached:
+        return {"action": "new-file", "restated": 0, "added": 0, "max_rel": 0.0}
+
+    old_head, old_rows = _parse_cache_lines(cached)
+    new_head, new_rows = _parse_cache_lines(fetched)
+    if old_head is None or new_head is None or old_head != new_head or not new_rows:
+        return {"action": "accept-unparseable", "restated": 0, "added": 0, "max_rel": 0.0}
+
+    shared = [d for d in new_rows if d in old_rows]
+    worst, n_over = 0.0, 0
+    for d in shared:
+        old_v, new_v = old_rows[d][1], new_rows[d][1]
+        if len(old_v) != len(new_v):
+            return {"action": "accept-shape", "restated": len(shared), "added": 0,
+                    "max_rel": float("inf")}
+        row_worst = max((_rel_diff(a, b) for a, b in zip(old_v, new_v)), default=0.0)
+        worst = max(worst, row_worst)
+        if row_worst >= tol:
+            n_over += 1
+
+    if n_over:
+        return {"action": "restated", "restated": n_over, "added": 0, "max_rel": worst}
+
+    added = [d for d in new_rows if d not in old_rows]
+    dropped = [d for d in old_rows if d not in new_rows]
+    if not added:
+        with open(path, "wb") as f:                 # nothing new: cache unchanged
+            f.write(cached)
+        return {"action": "unchanged", "restated": 0, "added": 0,
+                "dropped": len(dropped), "max_rel": worst}
+
+    # Cached bytes verbatim, then the new dates verbatim from the fetch. Sorted by
+    # date because datafeed._clean_frame refuses an unsorted cache.
+    body = [old_rows[d][0] for d in sorted(old_rows)] + \
+           [new_rows[d][0] for d in sorted(added)]
+    with open(path, "wb") as f:
+        f.write(("\n".join([old_head] + sorted(body, key=lambda ln: ln.split(",")[0]))
+                 + "\n").encode())
+    return {"action": "appended", "restated": 0, "added": len(added),
+            "dropped": len(dropped), "max_rel": worst}
+
+
 def refresh_cache(symbols, verbose=True) -> dict:
     """Re-download the price cache for `symbols` + the macro tickers. Network!
 
@@ -162,23 +269,73 @@ def refresh_cache(symbols, verbose=True) -> dict:
     A failed download is not fatal — the point of a cache-first design is that a
     bad yfinance day degrades to stale data, which the staleness guard then judges
     on its own terms.
+
+    EVERY WRITE GOES THROUGH THE TOLERANCE GATE (see _tolerance_gate): the fetcher
+    overwrites the CSV, and this function then decides whether that overwrite said
+    anything. Below config.REFRESH_REL_TOL it did not, and the cached bytes are
+    put back so the repository does not carry a 78 MB rewrite twice a day for a
+    difference no computation can resolve.
     """
     macro = config.import_sibling("macro", config.SIGNAL_LAB)
     wanted = list(dict.fromkeys(list(symbols) + list(macro.MACRO_TICKERS.values())))
-    stat = {"wanted": len(wanted), "ok": 0, "empty": 0, "error": 0}
+    tol = float(config.REFRESH_REL_TOL)
+    stat = {"wanted": len(wanted), "ok": 0, "empty": 0, "error": 0,
+            "unchanged": 0, "appended": 0, "restated": 0, "new": 0,
+            "bars_added": 0, "rows_restated": 0, "max_rel": 0.0, "restated_symbols": []}
     with _force_fetch():
         for sym in wanted:
+            path = datafeed._cache_path(sym)                        # noqa: SLF001
+            cached = b""
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    cached = f.read()
             try:
                 df = datafeed._read_symbol(sym, refresh=True)       # noqa: SLF001
             except Exception:
                 stat["error"] += 1
                 continue
-            stat["ok" if len(df) else "empty"] += 1
+            if not len(df):
+                stat["empty"] += 1
+                if cached and not os.path.exists(path):
+                    with open(path, "wb") as f:                     # never lose history
+                        f.write(cached)
+                continue
+            stat["ok"] += 1
+            if not os.path.exists(path):
+                continue                        # fetch succeeded but wrote nothing
+            d = _tolerance_gate(path, cached, tol)
+            stat["max_rel"] = max(stat["max_rel"], 0.0 if d["max_rel"] == float("inf")
+                                  else d["max_rel"])
+            if d["action"] == "unchanged":
+                stat["unchanged"] += 1
+            elif d["action"] == "appended":
+                stat["appended"] += 1
+                stat["bars_added"] += d["added"]
+            elif d["action"] in ("new-file",):
+                stat["new"] += 1
+            else:
+                stat["restated"] += 1
+                stat["rows_restated"] += d["restated"]
+                stat["restated_symbols"].append(sym)
     if verbose:
         print("  refresh   : %d symbols fetched (%d empty, %d errored) into %s"
               % (stat["ok"], stat["empty"], stat["error"],
                  os.path.relpath(config.CACHE_DIR, config.ROOT)
                  if config.CACHE_DIR.startswith(config.ROOT) else config.CACHE_DIR))
+        print("  tolerance : %d unchanged, %d appended (%d new bars), %d seeded, "
+              "%d RESTATED — largest sub-tolerance drift %.2e (tol %.0e)"
+              % (stat["unchanged"], stat["appended"], stat["bars_added"], stat["new"],
+                 stat["restated"], stat["max_rel"], tol))
+        if stat["restated_symbols"]:
+            # Loud on purpose: a restatement moves data_hash and every price this
+            # arena has ever scored a genome on. It should never be a silent line.
+            print("  RESTATED  : %d symbol(s) exceeded the tolerance and were "
+                  "rewritten whole (%d rows): %s — a split, dividend or vendor "
+                  "correction landed; data_hash moves and prior evaluations are a "
+                  "different vintage from here on."
+                  % (stat["restated"], stat["rows_restated"],
+                     ", ".join(sorted(stat["restated_symbols"])[:12])
+                     + (" ..." if len(stat["restated_symbols"]) > 12 else "")))
     return stat
 
 
@@ -910,6 +1067,11 @@ def main() -> int:
     #    (build_universe reads signal_lab's cached S&P table; with
     #    USE_LIVE_SP500_LIST off it only supplies sector anchors, and a missing
     #    cache degrades to the static fallback rather than failing.)
+    # Before anything reads the ledger: a union merge (see .gitattributes) can
+    # leave a row twice, and n_trials() is the N every deflated Sharpe here is
+    # deflated by.
+    ledger.dedup_ledger()
+
     universe = config.import_sibling("universe", config.SIGNAL_LAB)
     wanted = universe.build_universe()[0]
 

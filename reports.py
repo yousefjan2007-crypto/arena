@@ -92,20 +92,29 @@ def latest_reported_generation(state_dir=None) -> int:
 
 
 def _eval_for(art: dict, generation: int) -> dict:
-    """The artifact's evaluation record for `generation` — the LAST one filed if
+    """The artifact's evaluation record for `generation` — the LAST one FILED if
     the same generation was evaluated more than once (a second look at the vault
-    is a later, more deflated, and therefore more honest record than the first)."""
+    is a later, more deflated, and therefore more honest record than the first).
+
+    Ranked by the explicit `filed_seq` the registry stamps at store time, because
+    nothing else in the file can answer the question. metrics.json is written with
+    sort_keys=True, so both the on-disk order and json.loads' insertion order are
+    LEXICOGRAPHIC — and the eval key ends in the trial counts, where `trials9`
+    outranks `trials21`. Either would hand back the earlier, less deflated record
+    and this report would quote the more flattering number as the newest.
+
+    Records written before Phase 6 carry no filed_seq and rank 0. Where every
+    candidate is pre-Phase-6 the question is genuinely unanswerable from the file,
+    and the last in iteration order is returned as it always was.
+    """
     evals = art.get("evals") or {}
-    # File order, not sorted order: the eval key ends in a trial-count tag
-    # ("trials21.vault2") that sorts lexicographically, so sorting would rank
-    # trials9 above trials21 and hand back an EARLIER, less deflated record while
-    # claiming it was the latest. json.loads preserves insertion order, and
-    # insertion order here is the order the evaluations were filed.
     matching = [v for k, v in evals.items()
                 if k.split("|")[0] == "%04d" % int(generation)]
     if not matching:
         matching = list(evals.values())
-    return matching[-1] if matching else {}
+    if not matching:
+        return {}
+    return max(enumerate(matching), key=lambda iv: (int(iv[1].get("filed_seq", 0)), iv[0]))[1]
 
 
 def report_subject(generation: int, state_dir=None, artifact_dir=None) -> dict:
