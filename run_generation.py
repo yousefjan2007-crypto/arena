@@ -147,7 +147,16 @@ def _force_fetch():
 
 
 def _rel_diff(a: float, b: float) -> float:
-    """|a-b| relative to the larger magnitude. 0 vs 0 is 0, not a division."""
+    """|a-b| relative to the larger magnitude. 0 vs 0 is 0, not a division.
+
+    A cell that is absent on one side and present on the other is a REPAIR, not a
+    rounding difference, and returns inf so the tolerance gate takes it as a real
+    restatement. Without that, NaN would propagate through every comparison as
+    "not greater than the tolerance" and the repair would be silently discarded.
+    """
+    a_ok, b_ok = a == a, b == b                 # NaN is the only value != itself
+    if not (a_ok and b_ok):
+        return 0.0 if not (a_ok or b_ok) else float("inf")
     scale = max(abs(a), abs(b))
     if scale == 0.0:
         return 0.0
@@ -279,9 +288,14 @@ def refresh_cache(symbols, verbose=True) -> dict:
     macro = config.import_sibling("macro", config.SIGNAL_LAB)
     wanted = list(dict.fromkeys(list(symbols) + list(macro.MACRO_TICKERS.values())))
     tol = float(config.REFRESH_REL_TOL)
+    # Two maxima, never one: the largest drift among the files that were KEPT is
+    # the measurement that says the tolerance is set sensibly, and mixing a
+    # restated symbol's much larger drift into it would report a number above the
+    # tolerance under a label claiming everything stayed below it.
     stat = {"wanted": len(wanted), "ok": 0, "empty": 0, "error": 0,
             "unchanged": 0, "appended": 0, "restated": 0, "new": 0,
-            "bars_added": 0, "rows_restated": 0, "max_rel": 0.0, "restated_symbols": []}
+            "bars_added": 0, "rows_restated": 0, "max_rel_kept": 0.0,
+            "max_rel_restated": 0.0, "restated_symbols": []}
     with _force_fetch():
         for sym in wanted:
             path = datafeed._cache_path(sym)                        # noqa: SLF001
@@ -304,36 +318,41 @@ def refresh_cache(symbols, verbose=True) -> dict:
             if not os.path.exists(path):
                 continue                        # fetch succeeded but wrote nothing
             d = _tolerance_gate(path, cached, tol)
-            stat["max_rel"] = max(stat["max_rel"], 0.0 if d["max_rel"] == float("inf")
-                                  else d["max_rel"])
+            worst = 0.0 if d["max_rel"] == float("inf") else d["max_rel"]
             if d["action"] == "unchanged":
                 stat["unchanged"] += 1
+                stat["max_rel_kept"] = max(stat["max_rel_kept"], worst)
             elif d["action"] == "appended":
                 stat["appended"] += 1
                 stat["bars_added"] += d["added"]
+                stat["max_rel_kept"] = max(stat["max_rel_kept"], worst)
             elif d["action"] in ("new-file",):
                 stat["new"] += 1
             else:
                 stat["restated"] += 1
                 stat["rows_restated"] += d["restated"]
                 stat["restated_symbols"].append(sym)
+                stat["max_rel_restated"] = max(stat["max_rel_restated"], worst)
     if verbose:
         print("  refresh   : %d symbols fetched (%d empty, %d errored) into %s"
               % (stat["ok"], stat["empty"], stat["error"],
                  os.path.relpath(config.CACHE_DIR, config.ROOT)
                  if config.CACHE_DIR.startswith(config.ROOT) else config.CACHE_DIR))
-        print("  tolerance : %d unchanged, %d appended (%d new bars), %d seeded, "
-              "%d RESTATED — largest sub-tolerance drift %.2e (tol %.0e)"
+        print("  tolerance : %d kept unchanged, %d appended-to (%d new bars), "
+              "%d seeded, %d RESTATED — largest drift among the files KEPT %.2e "
+              "(tol %.0e)"
               % (stat["unchanged"], stat["appended"], stat["bars_added"], stat["new"],
-                 stat["restated"], stat["max_rel"], tol))
+                 stat["restated"], stat["max_rel_kept"], tol))
         if stat["restated_symbols"]:
-            # Loud on purpose: a restatement moves data_hash and every price this
-            # arena has ever scored a genome on. It should never be a silent line.
-            print("  RESTATED  : %d symbol(s) exceeded the tolerance and were "
-                  "rewritten whole (%d rows): %s — a split, dividend or vendor "
-                  "correction landed; data_hash moves and prior evaluations are a "
-                  "different vintage from here on."
-                  % (stat["restated"], stat["rows_restated"],
+            # Loud on purpose: a restatement moves the prices this arena scores
+            # genomes on. It should never be a silent line.
+            print("  RESTATED  : %d symbol(s) exceeded the tolerance (largest drift "
+                  "%.2e over %d row(s)) and were rewritten whole: %s — a split, "
+                  "dividend or vendor correction landed. An equity moves data_hash; "
+                  "a macro ticker moves panel_hash only (data_hash never sees the "
+                  "six macro series). Prior evaluations are a different vintage "
+                  "from here on."
+                  % (stat["restated"], stat["max_rel_restated"], stat["rows_restated"],
                      ", ".join(sorted(stat["restated_symbols"])[:12])
                      + (" ..." if len(stat["restated_symbols"]) > 12 else "")))
     return stat
