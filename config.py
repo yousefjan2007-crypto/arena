@@ -362,6 +362,20 @@ RETURNS_KEEP_GENERATIONS = 90
 # repo ever writes "live" here.
 EXECUTION_MODE = "sandbox"
 
+# ── the paper stage (run_paper.py; docs/DESIGN.md "Graduation ladder") ─────────
+# PAPER_ARM_CONSECUTIVE is the arming gate: run_paper.py may submit an order only
+# when the SAME champion has come through this many consecutive COMPLETE deep
+# evals still holding the pointer, and deepeval_history records it passing all ten
+# gates. Below it, the run computes and logs its intended orders and submits
+# nothing. The other four are the go-live EVIDENCE thresholds DESIGN names — they
+# decide what a paper session reports, never what it does, because "the system
+# never self-starts live": a human reads the table and flips EXECUTION_MODE.
+PAPER_ARM_CONSECUTIVE = 3           # consecutive complete deep evals the champion must survive
+PAPER_MIN_DAYS = 126                # trading days of paper before go-live is even discussable
+PAPER_MAX_TE_BPS = 25.0             # daily |paper - sim| that trips the tracking alert
+PAPER_MIN_CORR = 0.80               # corr(daily paper, sim-shadow) required
+PAPER_MAX_SLIPPAGE_BPS = 10.0       # median |fill slippage| required
+
 
 # ── configuration identity (gate G1 / the trial ledger) ────────────────────────
 # Two results are comparable only if they were produced under the same rules. The
@@ -400,12 +414,27 @@ EXECUTION_MODE = "sandbox"
 # knob (RETURNS_KEEP_GENERATIONS is the weaker case: it deletes files nothing
 # reads). The alternative — digesting it — would invalidate like-for-like against
 # every row on record to describe a difference those rows already carry.
+#
+# Nor the PAPER_* knobs, and that one is worth stating in full because
+# EXECUTION_MODE — an execution setting — IS in the digest. Two reasons they are
+# not. (1) Nothing in the simulation reads them: `grep PAPER_` finds run_paper.py
+# and verify.py and nothing in datafeed/env/strategy/evaluate/gates/ledger, so
+# they cannot move a single number a ledger row records. (2) Digesting them would
+# have BROKEN THE RUNNING SYSTEM the moment they were added: config_hash is
+# stamped on every ledger row and returns matrix, and run_generation raises
+# IdentityDrift — by design, fatally — when a generation already partly on disk is
+# resumed under a different identity. A knob that changes no result must not be
+# able to stop the nightly job. EXECUTION_MODE stays in because it has been in
+# every hash on record since Phase 1; removing it now would cost exactly what
+# adding these would.
 _CONFIG_HASH_SKIP = frozenset({
     "STATE_DIR", "ARTIFACT_DIR", "OUTPUT_DIR", "DATA_DIR",   # where files live
     "N_JOBS", "GEN_TIME_BUDGET_MIN", "DEEPEVAL_TIME_BUDGET_MIN",   # how fast, not what
     "RETURNS_KEEP_GENERATIONS",                     # what is kept, not what was computed
     "REFRESH_REL_TOL",                              # already visible in data_hash (above)
     "ENV_CHECK_INVARIANTS",                         # asserts, never arithmetic
+    "PAPER_ARM_CONSECUTIVE", "PAPER_MIN_DAYS", "PAPER_MAX_TE_BPS",   # the paper stage:
+    "PAPER_MIN_CORR", "PAPER_MAX_SLIPPAGE_BPS",                      # see above
 })
 # Inherited, never redeclared here, but the simulation reads them. (SEED is also
 # caught by _DECLARED_HERE now; it stays listed because losing it would be silent.)

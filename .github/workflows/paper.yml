@@ -1,21 +1,35 @@
 name: paper
 
-# NOT ARMED. docs/DESIGN.md "Graduation ladder": paper trading begins only after
-# the SAME champion has survived three consecutive weekly deep evals. There is no
-# champion at all yet, run_paper.py is Phase 7, and a cron line that fired into
-# that state would submit orders for a strategy nothing has approved.
+# NOT ARMED — twice over, and neither lock is this file's.
 #
-# The schedule below is therefore commented out, deliberately and visibly, rather
-# than deleted: weekdays 13:00 UTC = 09:00 ET, well before the 09:30 open auction
-# so MOO orders land even with Actions cron jitter.
+# 1. The CRON below is commented out. docs/DESIGN.md "Graduation ladder": paper
+#    trading begins only after the SAME champion has survived three consecutive
+#    weekly deep evals. There is no champion at all yet, so a schedule that fired
+#    into this state would run a session for a strategy nothing has approved.
+# 2. Even when it does fire, the step below runs `--dry`. Submitting needs
+#    `--submit` AND run_paper's own arming gate (config.PAPER_ARM_CONSECUTIVE)
+#    AND credentials that do not exist in this repo's secrets yet.
+#
+# The schedule is kept, commented, rather than deleted: weekdays 13:00 UTC =
+# 09:00 ET, well before the 09:30 open auction, because Alpaca accepts
+# market-on-open orders only until ~09:28 ET and Actions cron drifts by minutes.
 on:
   # schedule:
-  #   - cron: "0 13 * * 1-5"      # armed at paper graduation — Phase 7
+  #   - cron: "0 13 * * 1-5"      # uncomment BY HAND at paper graduation
   workflow_dispatch: {}
 
+# The session appends to state/paper_ledger.csv and state/paper_shadow.csv — the
+# record of what was ordered and how far the account drifted from the sandbox —
+# and the repo is the only place a runner's work survives. Write access is for
+# that commit-back and nothing else; no other scope is granted.
 permissions:
   contents: write
 
+# SHARED with generation.yml and deepeval.yml: all three append to state/ and
+# push. A paper session is minutes long and a generation is hours, so this is the
+# job most likely to queue behind another — which is correct. It must not race a
+# writer of the same files, and a session that starts late simply refuses to
+# submit stale-data orders rather than sending them into a market it cannot see.
 concurrency:
   group: arena-state
   cancel-in-progress: false
@@ -23,7 +37,23 @@ concurrency:
 jobs:
   paper:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    env:
+      # JOB level, not step level: Actions does not carry a step's `env:` into
+      # later steps, and the commit-back step has to be able to alert when it
+      # gives up (the lesson generation.yml learned the hard way).
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      # THESE TWO SECRETS DO NOT EXIST YET, and that is the intended state: they
+      # resolve to empty strings, broker_paper constructs UNARMED, every write
+      # refuses with "no_credentials" and the session still completes and reports.
+      # Creating them is a deliberate human act at graduation — the same act as
+      # uncommenting the cron above. The names are deliberately NOT
+      # ALPACA_API_KEY/ALPACA_SECRET_KEY (signal_lab's), so a live-account
+      # credential cannot be picked up here by accident.
+      ALPACA_PAPER_KEY: ${{ secrets.ALPACA_PAPER_KEY }}
+      ALPACA_PAPER_SECRET: ${{ secrets.ALPACA_PAPER_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,10 +61,15 @@ jobs:
         with:
           python-version: "3.9"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            requirements-paper.txt
 
       - name: Install pinned dependencies
-        run: pip install -r requirements.txt
+        # requirements-paper.txt is requirements.txt plus alpaca-py, and ONLY this
+        # workflow installs it: the execution client has no business in the
+        # environment that produces the numbers. See that file's header.
+        run: pip install -r requirements-paper.txt
 
       - name: Verify before trading anything
         # The same gate the other two workflows take, and the one that matters
@@ -42,15 +77,47 @@ jobs:
         run: python verify.py
 
       - name: Paper session (dry)
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        # --dry is the default and it is spelled out anyway, because the day
+        # someone edits this line is the day it should be obvious what changes.
+        # A stale cache exits 1 here rather than sizing orders on a market that
+        # has moved on; the alert says why.
+        run: python run_paper.py --dry --send
+
+      - name: Commit state back
+        # Only state/ — a paper session writes no artifacts, no reports and no
+        # data. Same rebase-and-retry loop as generation.yml, same reason: the Mac
+        # and the other two workflows push to this branch too, and .gitattributes
+        # gives state/*.csv git's union merge driver so an append never conflicts.
+        if: always()
         run: |
-          if [ ! -f run_paper.py ]; then
-            echo "run_paper.py does not exist yet — it is Phase 7 (broker_paper.py,"
-            echo "run_paper.py, the tracking ledger). This workflow is the slot it"
-            echo "will land in, dispatch-only until then. Nothing to do; exiting 0."
+          set -uo pipefail
+          git config user.name "arena[bot]"
+          git config user.email "arena@users.noreply.github.com"
+          git add -A state
+          if git diff --cached --quiet; then
+            echo "nothing changed — no commit"
             exit 0
           fi
-          python run_paper.py --dry
+          git commit -q -m "arena: paper session [skip ci]" \
+            -m "Runner state from ${GITHUB_RUN_ID} (${GITHUB_EVENT_NAME}). Paper ledger + sim-shadow only."
+          for i in 1 2 3; do
+            git fetch --deepen=$((5 * i)) origin "${GITHUB_REF_NAME}" \
+              || git fetch origin "${GITHUB_REF_NAME}" || true
+            git rebase "origin/${GITHUB_REF_NAME}" || git rebase --abort || true
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "pushed on attempt ${i}"
+              exit 0
+            fi
+            echo "push attempt ${i} failed; retrying"
+            sleep $((10 * i))
+          done
+          # Exit 75 (EX_TEMPFAIL), as in generation.yml. A lost paper session is
+          # less costly than a lost generation — nothing was evaluated — but the
+          # ledger row for an order that WAS submitted is the record of a real
+          # position, and losing that silently is not acceptable.
+          echo "could not push after 3 attempts; this session's ledger rows are lost"
+          python alerts_arena.py --push-failed --job "paper session" --attempts 3 \
+            --ref "${GITHUB_REF_NAME}" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --send || echo "(the failure alert could not be delivered either)"
+          exit 75

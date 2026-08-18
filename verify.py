@@ -58,7 +58,20 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here:
                          backtest overfitting; plant one genuinely persistent
                          column and it reports a low one, having found it.
 
-All eleven of docs/DESIGN.md's checks are now implemented.
+All eleven of docs/DESIGN.md's checks are now implemented. Phase 7 adds a
+twelfth, for the stage where a mistake stops being hypothetical:
+
+ 12. Paper stage         the arming gate as a truth table over synthetic
+                         deep-eval history (three consecutive complete entries
+                         under one champion arm it; a broken streak, another
+                         champion, failed gates, or a budget-truncated run do
+                         not); the weights -> whole-share -> delta conversion
+                         against a fake position book (flips, dust, exits,
+                         truncation, the unfiltered risk-cap repair); the paper
+                         ledger's idempotency by order id and by content; and
+                         the equivalence the whole design rests on — the orders
+                         the live path computes at the last bar ARE the fills
+                         the ordinary sandbox episode makes on the next one.
 
 Everything here runs on a synthetic, seeded market. verify.py NEVER touches the
 network or the cache: the test suite must give the same answer on a plane, on a
@@ -83,9 +96,11 @@ import features as arena_features
 import gates
 import genome as gn
 import ledger
+import broker_paper
 import registry
 import run_deepeval
 import run_generation
+import run_paper
 from env import CostModel, MarketEnv
 from strategy import StrategyAgent
 from strategy import sharpe as report_sharpe      # NaN on degenerate input, unlike
@@ -1708,6 +1723,290 @@ def test_pbo_sanity():
           "column %d wins %d of %d in-sample splits" % (planted, wins, total))
 
 
+# ── 12. the paper stage ────────────────────────────────────────────────────────
+def _hist_row(generation, after, candidates, complete=1, before=""):
+    """One state/deepeval_history.csv row, in the real schema's shape."""
+    row = {c: "" for c in run_deepeval.HISTORY_COLUMNS}
+    row.update({"generation": str(generation), "champion_hash_before": before,
+                "champion_hash_after": after, "candidates": candidates,
+                "complete": str(complete), "n_candidates": "1"})
+    return row
+
+
+class FakeBroker:
+    """The broker's read surface, with a book. No alpaca-py, no network, no keys.
+
+    verify.py never touches the network, so the adapter under test here is the
+    INTERFACE run_paper depends on — positions() as a signed whole-share dict —
+    rather than Alpaca's wire format. The real adapter's unarmed contract is
+    checked separately below, and it is checkable precisely because an unarmed
+    AlpacaPaperBroker imports nothing.
+    """
+
+    mode = "paper"
+
+    def __init__(self, book=None, credentialed=True):
+        self.book = dict(book or {})
+        self.credentialed = credentialed
+        self.placed = []
+
+    def positions(self):
+        return dict(self.book) if self.credentialed else {}
+
+    def place(self, symbol, side, qty):
+        self.placed.append((symbol, side, qty))
+        return {"executed": True, "order_id": "fake-%d" % len(self.placed),
+                "status": "accepted"}
+
+
+def test_paper_stage():
+    """Phase 7. The three things that decide whether an order exists and what it
+    is: the arming gate, the weights -> whole-share -> delta conversion, and the
+    ledger's idempotency. Plus the one equivalence the whole design rests on —
+    that the decision handed to a broker is the decision the sandbox scores.
+
+    Offline by construction: a synthetic market, a fake broker, and synthetic
+    deep-eval history. No alpaca-py import happens anywhere in this test.
+    """
+    print("\n12. Paper stage (arming gate, share deltas, ledger, live/sim parity)")
+
+    # ── (a) the arming gate, as a truth table ─────────────────────────────────
+    X, Z = "champ0000001", "other0000002"
+    passed = "%s:1:none" % X
+    armed_rows = [_hist_row(1, X, passed), _hist_row(2, X, "cand1:0:G5"),
+                  _hist_row(3, X, "cand2:0:G2+G4")]
+    cases = [
+        ("3 consecutive complete entries, same champion, gates on record",
+         armed_rows, X, True),
+        ("a broken streak (another genome held the pointer in the middle)",
+         [_hist_row(1, X, passed), _hist_row(2, Z, "%s:1:none" % Z), _hist_row(3, X, "")],
+         X, False),
+        ("the latest entries name a DIFFERENT champion",
+         armed_rows, Z, False),
+        ("the champion's own deep eval failed gates",
+         [_hist_row(g, X, "%s:0:G2+G4" % X) for g in (1, 2, 3)], X, False),
+        ("only 2 complete entries (the third ran out of budget)",
+         [_hist_row(1, X, passed), _hist_row(2, X, ""), _hist_row(3, X, "", complete=0)],
+         X, False),
+        ("no champion pointer at all", armed_rows, None, False),
+    ]
+    for name, rows, champ, expect in cases:
+        verdict = run_paper.arming_status(rows, champ)
+        check("arming: %s -> %s" % (name, "ARMED" if expect else "unarmed"),
+              verdict["armed"] == expect,
+              verdict["reason"][:96])
+
+    # A generation re-run appends a SECOND row; the trigger counts generations,
+    # not rows, and the later row for a generation is the decision that stands.
+    rerun = armed_rows + [_hist_row(3, Z, "%s:1:none" % Z)]
+    check("arming: a re-run of a generation replaces that generation's entry",
+          run_paper.complete_entries(rerun)[-1]["champion_hash_after"] == Z
+          and len(run_paper.complete_entries(rerun)) == 3
+          and not run_paper.arming_status(rerun, X)["armed"],
+          "4 rows -> 3 entries, the last of generation 3 wins, and the champion is "
+          "no longer armed")
+
+    # The real adapter, unarmed: it constructs, refuses every write, and reads
+    # EMPTY — which run_paper must never read as "flat".
+    b = broker_paper.AlpacaPaperBroker(key=None, secret=None)
+    refusals = [b.place("SPY", "buy", 3), b.close("SPY")]
+    check("unarmed AlpacaPaperBroker refuses every write and imports no alpaca",
+          all(r["executed"] is False and r["reason"] == broker_paper.UNARMED_REASON
+              for r in refusals)
+          and b.positions() == {} and b.account() is None
+          and b.fills_since("2020-01-02") == []
+          and "alpaca" not in __import__("sys").modules,
+          "place/close -> %s; positions {} means UNKNOWN" % refusals[0]["reason"])
+
+    # ── (b) weights -> whole shares -> order deltas ───────────────────────────
+    # One flat $50 market so every number below is checkable by hand:
+    # equity $15,000, per-name cap 20% = $3,000 = 60 shares, dust floor $500 = 10 sh.
+    px, equity = 50.0, 15000.0
+    market = flat_market(n_days=6, n_syms=6, price=px)
+    env = MarketEnv(market, CostModel())
+    close_t = market.close[-1]
+    current = np.array([60.0, 0.0, 2.0, 60.0, 69.0, 0.0])
+    target_w = np.array([-0.20, 0.20, 0.0, 0.199, 0.20, 0.0])
+    tgt, w, _scale, _rej = run_paper.share_targets(env, target_w, close_t, equity)
+    plan = run_paper.order_deltas(env, market, tgt, current, close_t, equity, "rebalance")
+    got = {o["symbol"]: (o["side"], o["qty"], o["reason"]) for o in plan["orders"]}
+    dropped = dict(plan["dropped"])
+
+    check("a long -> short flip is ONE order for the whole distance",
+          got.get("FLT0") == ("sell", 120, "rebalance"),
+          "+60 shares to a -20%% target (-60 shares) -> %s" % (got.get("FLT0"),))
+    check("a new position rounds to whole shares, truncated toward zero",
+          got.get("FLT1") == ("buy", 60, "rebalance") and tgt[3] == 59.0,
+          "20%% of $15,000 at $50 -> 60 sh; 19.9%% -> $%.0f/$50 = 59.7 -> %d sh"
+          % (0.199 * equity, int(tgt[3])))
+    check("a full exit is exempt from the dust filter",
+          got.get("FLT2") == ("sell", 2, "rebalance"),
+          "a $100 position is below the $%.0f minimum and still gets closed"
+          % config.MIN_POSITION_USD)
+    check("a sub-minimum REBALANCE is dropped as dust",
+          "FLT3" not in got and dropped.get("FLT3") == "below_min_usd",
+          "1 share = $50 < $%.0f, so the 60 -> 59 trim is not worth trading"
+          % config.MIN_POSITION_USD)
+    check("...but a position outside the per-name cap is repaired unfiltered",
+          got.get("FLT4") == ("sell", 9, "risk_cap"),
+          "69 sh = $3,450 = 23.0% of equity; the 9-share trim is $450 of dust and "
+          "risk limits outrank the dust filter")
+    book = plan["book_after"]
+    val = book * px
+    check("the resulting book is integral and inside every env cap",
+          np.all(book == np.trunc(book))
+          and np.max(np.abs(val)) <= config.MAX_NAME_WEIGHT * equity + 1e-9
+          and np.abs(val).sum() <= config.MAX_GROSS_LEV * equity * (1 + config.LEV_EPS)
+          and abs(val.sum()) <= config.MAX_NET_LEV * equity * (1 + config.LEV_EPS),
+          "gross %.3fx net %+.3fx, max name %.1f%%"
+          % (np.abs(val).sum() / equity, val.sum() / equity,
+             100 * np.max(np.abs(val)) / equity))
+    fake = FakeBroker({"FLT0": 60, "FLT2": 2, "FLT3": 60, "FLT4": 69})
+    check("the same deltas come out of a broker's position dict",
+          {s: int(q) for s, q in fake.positions().items() if q}
+          == {"FLT0": 60, "FLT2": 2, "FLT3": 60, "FLT4": 69}
+          and FakeBroker({}, credentialed=False).positions() == {},
+          "an unarmed broker reports {} — unknown, not flat")
+
+    # ── (c) the paper ledger is append-only AND idempotent ────────────────────
+    tmp = tempfile.mkdtemp(prefix="arena_verify_paper_")
+    try:
+        rows = [{"date": "2026-08-17", "symbol": o["symbol"], "side": o["side"],
+                 "qty": o["qty"], "fill_px": "", "order_id": "", "status": "intended",
+                 "genome_hash": X, "reason": o["reason"]} for o in plan["orders"]]
+        first = run_paper.append_ledger(rows, state_dir=tmp)
+        second = run_paper.append_ledger(rows, state_dir=tmp)
+        check("re-running a session on the same bar appends no duplicate intended rows",
+              first["written"] == len(rows) and second["written"] == 0
+              and second["skipped"] == len(rows)
+              and len(run_paper.read_ledger(tmp)) == len(rows),
+              "%d rows written, then %d written / %d skipped"
+              % (first["written"], second["written"], second["skipped"]))
+
+        fill = {"date": "2026-08-18", "symbol": "FLT1", "side": "buy", "qty": 60,
+                "fill_px": 50.02, "order_id": "abc-123", "status": "filled",
+                "genome_hash": X, "reason": "fill"}
+        run_paper.append_ledger([fill], state_dir=tmp)
+        again = run_paper.append_ledger([dict(fill, status="filled")], state_dir=tmp)
+        check("a fill is identified by its order_id, so an overlapping "
+              "reconciliation window double-counts nothing",
+              again["written"] == 0 and again["skipped"] == 1,
+              "the same closed order read twice writes one row")
+
+        changed = [dict(rows[0], qty=int(rows[0]["qty"]) + 5)]
+        check("a decision that genuinely CHANGED within a session is appended, not "
+              "swallowed",
+              run_paper.append_ledger(changed, state_dir=tmp)["written"] == 1,
+              "same date and symbol, different size -> a second row; the last row "
+              "for a (date, symbol) is the live one")
+
+        shadow = {"date": "2026-08-18", "genome_hash": X, "sim_net": "0.001",
+                  "paper_net": "0.0007", "tracking_error_bps": "-3.0",
+                  "fill_slippage_bps": "1.5", "n_fills": 1, "paper_equity": "15010",
+                  "paper_last_equity": "15000", "sim_equity": "15015"}
+        check("one shadow row per session date",
+              run_paper.append_shadow(shadow, state_dir=tmp)
+              and not run_paper.append_shadow(shadow, state_dir=tmp)
+              and len(run_paper.read_shadow(tmp)) == 1,
+              "a re-run on the same bar re-measures nothing")
+
+        # A file written under an older column list must not be appended into.
+        with open(run_paper.ledger_path(tmp), "w") as f:
+            f.write("date,symbol,qty\n2026-08-17,FLT1,60\n")
+        try:
+            run_paper.append_ledger([fill], state_dir=tmp)
+            refused = False
+        except ValueError:
+            refused = True
+        check("appending into a differently-shaped ledger is refused, not misaligned",
+              refused, "csv.writer appends positionally; a silent shift would "
+                       "misreport every order ever placed")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # Breach spells: the anti-spam key moves only when a NEW divergence starts.
+    limit = config.PAPER_MAX_TE_BPS
+    series = [("d1", 2.0), ("d2", limit + 5), ("d3", limit + 9), ("d4", 1.0),
+              ("d5", limit + 1)]
+    srows = [{"date": d, "tracking_error_bps": str(v)} for d, v in series]
+    check("a breach spell is keyed on the day it began, so one divergence is one alert",
+          run_paper.breach_spell_start(srows, limit) == "d5"
+          and run_paper.breach_spell_start(srows[:3], limit) == "d2"
+          and run_paper.breach_spell_start(srows[:1], limit) is None,
+          "d2-d3 is one spell, d4 clears it, d5 opens a new one that speaks again")
+
+    # ── (d) the live decision IS the sandbox's decision ───────────────────────
+    # run_episode decides at bar t and fills at t+1, so it stops deciding one bar
+    # before the market ends — and a paper session stands exactly on that last bar
+    # with the next open ahead of it. live_decision executes that one extra loop
+    # iteration. If it drifted from the loop by so much as a rounding rule, the
+    # tracking error would measure arena's own arithmetic instead of the broker's
+    # execution, so the equivalence is pinned end to end: the orders the live path
+    # produces at the second-to-last bar must BE the fills the ordinary episode
+    # makes at the last one.
+    full = synthetic_market(n_days=320, n_syms=6, seed=config.SEED)
+    g = _genome("mom_rule", 21, [], (("lookback", 21), ("skip", 0)), rebalance=1)
+    start = full.dates[200]
+
+    # ONE reference episode over the whole window. It is forward-only and
+    # deterministic, so its fills on bar T are exactly the fills an episode that
+    # ENDED at T would have made — which is what the live path has to reproduce
+    # from the market truncated one bar earlier.
+    log = []
+    StrategyAgent(g, full, CostModel()).run_episode(
+        env_start=start, env_end=full.dates[-1], decision_log=log)
+    by_date = {}
+    for row in log:
+        if row["side"] == "carry":
+            continue
+        by_date.setdefault(row["date"], {})
+        by_date[row["date"]][row["symbol"]] = \
+            by_date[row["date"]].get(row["symbol"], 0) + row["shares"]
+
+    # Six bars, taken from the end and deliberately mixed: bars the sandbox
+    # traded on and bars it did not, because "the live path also orders NOTHING
+    # when the sandbox would have" is half the claim.
+    candidates = [t for t in range(len(full) - 12, len(full))]
+    traded = agreed = 0
+    mismatch = None
+    for T in candidates:
+        short = datafeed.MarketData(full.dates[:T], full.symbols, full.open[:T],
+                                    full.close[:T], full.volume[:T])
+        agent = StrategyAgent(g, short, CostModel())
+        sim_log, audit = [], []
+        agent.run_episode(env_start=start, env_end=short.dates[-1],
+                          decision_log=sim_log, fit_audit=audit)
+        shares, cash = run_paper.replay_book(sim_log, short)
+        eq = cash + float(np.sum(np.where(shares != 0.0, shares * short.close[-1], 0.0)))
+        peak = float(np.max(agent._equity))                           # noqa: SLF001
+        live = run_paper.live_decision(agent, short, shares, eq, peak,
+                                       int(short.pos(start, "left")), audit)
+        env2 = MarketEnv(short, CostModel())
+        tgt2, _w2, _s2, _r2 = run_paper.share_targets(env2, live["target_w"],
+                                                      short.close[-1], eq)
+        plan2 = run_paper.order_deltas(env2, short, tgt2, shares, short.close[-1], eq,
+                                       live["reason"])
+        live_orders = {o["symbol"]: (1 if o["side"] == "buy" else -1) * o["qty"]
+                       for o in plan2["orders"]}
+        want = {s: int(round(v)) for s, v in by_date.get(full.dates[T], {}).items() if v}
+        traded += bool(want)
+        if live_orders == want:
+            agreed += 1
+        elif mismatch is None:
+            mismatch = "%s: live %s vs episode %s" % (full.dates[T].date(),
+                                                      sorted(live_orders.items()),
+                                                      sorted(want.items()))
+        last = (eq, float(agent._equity[-1]))                         # noqa: SLF001
+    check("the live decision reproduces the sandbox's own next-bar orders exactly",
+          agreed == len(candidates) and traded >= 2,
+          "%d/%d bars agree, %d of them with actual trades%s"
+          % (agreed, len(candidates), traded, "" if mismatch is None else
+             " — first mismatch %s" % mismatch))
+    check("...and the log replay agrees with the episode's own equity",
+          abs(last[0] - last[1]) <= config.ACCOUNT_TOL * 10,
+          "replayed $%.2f vs episode $%.2f" % last)
+
+
 def main() -> int:
     test_planted_leak()
     test_determinism()
@@ -1720,6 +2019,7 @@ def main() -> int:
     test_genome_ops()
     test_no_wallclock()
     test_pbo_sanity()
+    test_paper_stage()
     print("\nVERIFY:", "ALL PASS" if ok else "FAILURES PRESENT")
     return 0 if ok else 1
 

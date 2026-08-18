@@ -318,6 +318,95 @@ def deepeval_summary(generation: int, candidates, promoted=None, champion_before
     return title, "\n".join(lines)
 
 
+def paper_summary(status: str, champion=None, date=None, sim_net=None, paper_net=None,
+                  tracking_error_bps=None, slippage_bps=None, n_days=None,
+                  arm_consecutive=None, detail: str = "") -> tuple:
+    """The two things the paper stage has to say out loud (docs/DESIGN.md ladder).
+
+    status  "armed"           the arming gate closed for the first time: this
+                              champion has survived PAPER_ARM_CONSECUTIVE
+                              consecutive complete deep evals and run_paper.py
+                              may now submit orders. A state transition worth a
+                              phone buzz precisely because nothing else in the
+                              system announces that trading became possible.
+            "tracking-breach" a session's |paper - sim-shadow| exceeded
+                              config.PAPER_MAX_TE_BPS. Sent once per breach
+                              SPELL, not once per day inside one (run_paper keys
+                              the anti-spam on the spell's first date), because a
+                              five-day divergence is one piece of news.
+            "go-live-candidate"
+                              every measurable criterion in DESIGN's ladder is
+                              met. A RECOMMENDATION AND NOTHING ELSE: the body
+                              says in as many words that the system cannot act
+                              on it, because a human flipping EXECUTION_MODE is
+                              the entire safety property here.
+
+    Pure: every number is passed in.
+    """
+    ghash = champion or "?"
+    if status == "armed":
+        title = "arena paper stage ARMED: %s" % ghash
+        lines = ["champion %s has held the pointer through %s consecutive complete "
+                 "deep evals, and deepeval_history records it passing all ten gates."
+                 % (ghash, arm_consecutive if arm_consecutive is not None else "?"),
+                 "run_paper.py may now submit market-on-open orders to the ALPACA "
+                 "PAPER account. No real money is involved and none can be: the "
+                 "adapter hardcodes paper=True.",
+                 "",
+                 "This is the start of measurement, not a verdict. The paper stage "
+                 "runs for at least %s trading days before the evidence table is "
+                 "even worth reading, and going live is a human decision nothing "
+                 "here can make." % (n_days if n_days is not None else "?")]
+    elif status == "go-live-candidate":
+        title = "arena paper: GO-LIVE CANDIDATE %s — a human decision" % ghash
+        lines = ["%s has now met every measurable criterion in the graduation "
+                 "ladder over %s paper sessions: median |fill slippage| %s bps, "
+                 "tracking inside tolerance, and a paper path that tracks its "
+                 "sim-shadow." % (ghash, n_days if n_days is not None else "?",
+                                  _bps(slippage_bps)),
+                 "",
+                 "NOTHING HAS BEEN DONE. This system does not go live by itself and "
+                 "has no code that could: the only broker adapter it owns hardcodes "
+                 "paper=True, and EXECUTION_MODE is a setting a person edits. Read "
+                 "the evidence table in the session log before deciding anything.",
+                 "",
+                 "The criteria are necessary, not sufficient. They say the executed "
+                 "book resembled the simulated one — not that the edge is real."]
+    else:
+        title = ("arena paper: tracking error %s bps%s"
+                 % (_bps(tracking_error_bps), " on %s" % date if date else ""))
+        lines = ["champion %s%s" % (ghash, " | %s" % date if date else ""),
+                 "sim-shadow %s   paper %s   difference %s bps"
+                 % (_pct(sim_net), _pct(paper_net), _bps(tracking_error_bps))]
+        if slippage_bps is not None:
+            lines.append("median fill slippage %s bps vs the day's open" % _bps(slippage_bps))
+        lines += ["",
+                  "The paper account and the simulator were handed the same target "
+                  "weights on the same day and did not end it in the same place. "
+                  "That gap is the whole point of the paper stage: it is the part "
+                  "of the backtest that was never true."]
+    if detail:
+        lines += ["", detail]
+    lines += ["", SURVIVORSHIP_LINE, HONESTY_LINE]
+    return title, "\n".join(lines)
+
+
+def _bps(value) -> str:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    return "n/a" if f != f else "%+.1f" % f
+
+
+def _pct(value) -> str:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    return "n/a" if f != f else "%+.3f%%" % (100.0 * f)
+
+
 def push_failure_summary(job: str, attempts: int, ref: str = "", run_url: str = "") -> tuple:
     """A cloud session that computed real work and could not push it home.
 
@@ -419,6 +508,12 @@ if __name__ == "__main__":
                               n_trials=84, vault_trials=4, status="refused",
                               platform="x86_64linux")
     t3, b3 = data_stale_summary(6.2, 6.0, "2026-08-11", config.MAX_DATA_STALENESS_DAYS)
+    t4, b4 = paper_summary("armed", champion="35d85a0408d2",
+                           arm_consecutive=config.PAPER_ARM_CONSECUTIVE,
+                           n_days=config.PAPER_MIN_DAYS)
+    t5, b5 = paper_summary("tracking-breach", champion="35d85a0408d2", date="2026-08-17",
+                           sim_net=0.0041, paper_net=-0.0002,
+                           tracking_error_bps=-43.0, slippage_bps=6.2)
 
     tmp = tempfile.mkdtemp(prefix="arena_alert_")
     print("\n--- composer 1: the nightly generation line ---")
@@ -427,6 +522,10 @@ if __name__ == "__main__":
     send_all(t2, b2, dry_run=True)
     print("\n--- composer 3: the staleness abort ---")
     send_all(t3, b3, dry_run=True)
+    print("\n--- composer 4: the paper stage arming ---")
+    send_all(t4, b4, dry_run=True)
+    print("\n--- composer 5: a paper tracking-error breach ---")
+    send_all(t5, b5, dry_run=True)
 
     # Anti-spam, end to end, against a throwaway state dir: a first state is
     # delivered, the identical state is silent, a moved state speaks again.
@@ -446,6 +545,6 @@ if __name__ == "__main__":
           % moved)
     print("  smoke: %s" % ("PASS" if (not same and moved) else "FAIL"))
     print("  state file  : %s" % alert_state_path(tmp))
-    for line in (b1, b2, b3):
+    for line in (b1, b2, b3, b4, b5):
         assert line.rstrip().endswith(HONESTY_LINE), "a body reached a channel without the footer"
     print("  every body ends with the honesty line: PASS")
