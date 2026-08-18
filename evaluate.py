@@ -671,6 +671,51 @@ def ruin_mc(daily_net, rng=None, paths=None, years=None, dd=None, block=None) ->
                     % par.get("error", "degenerate parameters")}
 
 
+def _shared_calendar(cand_net, cand_dates, inc_net, inc_dates) -> tuple:
+    """(candidate, incumbent, shared dates) restricted to the calendar BOTH were
+    scored on. The one place the two halves of gate G9 agree on what "same period"
+    means, so they cannot drift apart."""
+    a = pd.Series(np.asarray(cand_net, dtype=np.float64),
+                  index=pd.DatetimeIndex(cand_dates))
+    b = pd.Series(np.asarray(inc_net, dtype=np.float64), index=pd.DatetimeIndex(inc_dates))
+    common = a.index.intersection(b.index)
+    return a.reindex(common).to_numpy(), b.reindex(common).to_numpy(), common
+
+
+def shared_span_sharpes(cand_net, cand_dates, inc_net, inc_dates) -> dict:
+    """Gate G9's FIRST half: both parties' Sharpe over the days they share.
+
+    G1 pins the two runs to the same market and the same last bar, but NOT to the
+    same first bar — evaluate.full_eval starts each genome at its own first active
+    bar, and after the window-END fix a challenger whose history begins in 2015 is
+    like-for-like with a champion scored from 1999. Comparing each party's OWN
+    full-window Sharpe would then hand the shorter party every era the longer one
+    had to survive and it did not: a 2015-start candidate is measured across a
+    single bull run, the incumbent across the dot-com bust, 2008 and 2020, and the
+    margin gate reads the difference as skill. THE DIFFERENCE IT WOULD BE READING
+    IS THE CALENDAR.
+
+    So both Sharpes are computed on the intersection, exactly as
+    rolling_window_wins already does for the other half of G9. Fewer than
+    config.SHARPE_MIN_OBS shared days is not a thin comparison, it is no
+    comparison: both come back NaN, which gates.py counts as unmeasured, and an
+    unmeasured gate is a failed gate.
+    """
+    a, b, common = _shared_calendar(cand_net, cand_dates, inc_net, inc_dates)
+    out = {"n_common_days": int(len(common)),
+           "start": str(common[0].date()) if len(common) else None,
+           "end": str(common[-1].date()) if len(common) else None}
+    if len(common) < config.SHARPE_MIN_OBS:
+        return dict(out, cand_sharpe=float("nan"), inc_sharpe=float("nan"),
+                    note="only %d shared day(s), fewer than the %d a Sharpe needs: "
+                         "the margin is NOT MEASURABLE on a shared calendar"
+                         % (len(common), config.SHARPE_MIN_OBS))
+    return dict(out, cand_sharpe=sharpe(a), inc_sharpe=sharpe(b),
+                note="both Sharpes measured on the %d days both parties were "
+                     "scored (%s .. %s)"
+                     % (len(common), out["start"], out["end"]))
+
+
 def rolling_window_wins(cand_net, cand_dates, inc_net, inc_dates, years=None) -> dict:
     """Gate G9's second half: the share of rolling windows the candidate wins.
 
@@ -682,11 +727,7 @@ def rolling_window_wins(cand_net, cand_dates, inc_net, inc_dates, years=None) ->
     the same doctrine gates.py applies to every comparison.
     """
     years = int(config.GATE_ROLLING_WINDOW_YEARS if years is None else years)
-    a = pd.Series(np.asarray(cand_net, dtype=np.float64),
-                  index=pd.DatetimeIndex(cand_dates))
-    b = pd.Series(np.asarray(inc_net, dtype=np.float64), index=pd.DatetimeIndex(inc_dates))
-    common = a.index.intersection(b.index)
-    a, b = a.reindex(common).to_numpy(), b.reindex(common).to_numpy()
+    a, b, common = _shared_calendar(cand_net, cand_dates, inc_net, inc_dates)
 
     width = years * config.TRADING_DAYS_YEAR
     step = max(1, config.TRADING_DAYS_YEAR // 4)
@@ -843,10 +884,21 @@ if __name__ == "__main__":
                                         "n/a" if np.isnan(v) else "%+.1f%%" % (100 * v), d)
                       for w, v, d in zip(config.GATE_REGIME_WINDOWS, slices, days)))
     print("      NaN slices are PASS-BY-ABSENCE: the series said nothing about that")
-    print("      window, and inventing a failure there is as dishonest as a pass.")
+    print("      window, and inventing a failure there is as dishonest as a pass —")
+    print("      bounded by gates.py at GATE_REGIME_MIN_COVERED of %d windows, so"
+          % config.GATE_REGIME_MIN_COVERED)
+    print("      absence may not be what carries G8.")
     wins = rolling_window_wins(good, dates, flat, dates)
     print("    G9 rolling    : candidate wins %.0f%% of %d %d-year windows (%s)"
           % (100 * wins["win_frac"], wins["n_windows"], config.GATE_ROLLING_WINDOW_YEARS,
              wins["note"]))
+    # G9's other half on ASYMMETRIC spans — the case the gate exists for: a
+    # challenger that only ran for the tail of the incumbent's history.
+    tail = dates[-600:]
+    span = shared_span_sharpes(good[-600:], tail, flat, dates)
+    print("    G9 margin     : candidate %+.2f vs incumbent %+.2f on %d shared days "
+          "(%s .. %s); the incumbent's OWN full window is %+.2f"
+          % (span["cand_sharpe"], span["inc_sharpe"], span["n_common_days"],
+             span["start"], span["end"], sharpe(flat)))
     print("\n  DSR and PBO correct for SEARCH, not for a wrong sandbox. They are")
     print("  evidence about the past, not a guarantee — and not financial advice.")

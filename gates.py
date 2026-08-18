@@ -23,8 +23,8 @@ here holds a number.
 | G5  | CPCV 28 paths    | >= GATE_CPCV_MIN_POS_FRAC positive, median SR >= GATE_CPCV_MIN_MEDIAN_SR |
 | G6  | bootstrap CI     | lower bound > 0                               |
 | G7  | 2x cost stress   | stressed Sharpe > 0 and >= GATE_STRESS_MIN_SR_RATIO x base |
-| G8  | regime slices    | none below GATE_REGIME_MAX_LOSS; >= GATE_REGIME_MIN_OK above GATE_REGIME_SOFT_LOSS |
-| G9  | beats incumbent  | Sharpe > incumbent + GATE_BEAT_SR_MARGIN AND wins >= GATE_ROLLING_WIN_FRAC of rolling windows |
+| G8  | regime slices    | >= GATE_REGIME_MIN_COVERED windows covered; none below GATE_REGIME_MAX_LOSS; >= GATE_REGIME_MIN_OK above GATE_REGIME_SOFT_LOSS |
+| G9  | beats incumbent  | Sharpe > incumbent + GATE_BEAT_SR_MARGIN, both measured on the SHARED calendar, AND wins >= GATE_ROLLING_WIN_FRAC of rolling windows |
 | G10 | ruin MC          | P(DD > GATE_RUIN_DD in RUIN_MC_YEARS) < GATE_RUIN_MAX_PROB |
 
 TIES GO TO THE INCUMBENT — the report says so in `ties_to_incumbent`, and it is
@@ -39,6 +39,16 @@ A NaN slice means the scored series contains no day of that crisis at all. Faili
 a candidate for a window it never traded would be inventing evidence, so a NaN
 counts as satisfying both halves of G8 — and run_deepeval prints the day count
 beside each slice so an absent window is visible rather than silently generous.
+THE INVERSION IS BOUNDED: fewer than GATE_REGIME_MIN_COVERED windows covered and
+G8 fails as unmeasurable, because a pass carried by absent windows is not evidence.
+
+SHORT-HISTORY CANDIDATES ARE THE REASON FOR TWO OF THE RULES ABOVE (that bound,
+and G9's shared-calendar margin). G1 compares window ENDS, not starts, so a genome
+first active in 2015 is legitimately like-for-like with a champion scored from
+1999 — it just has less history. Everything that then compares the two has to be
+measured over ground they both stand on, or the shorter calendar quietly becomes
+the advantage: an era without the dot-com bust, 2008 and 2020 flatters a Sharpe
+and empties the regime slices at the same time.
 """
 from __future__ import annotations
 
@@ -63,6 +73,12 @@ def _num(value):
     except (TypeError, ValueError):
         return None
     return None if math.isnan(out) else out
+
+
+def _fmt_sr(value) -> str:
+    """A Sharpe for a gate note, or "n/a". Never a formatted NaN."""
+    out = _num(value)
+    return "n/a" if out is None else "%+.2f" % out
 
 
 def _gate(gid: str, passed: bool, value, threshold, detail: str = "") -> dict:
@@ -235,7 +251,19 @@ def _g7(cand, cfg) -> dict:
 def _g8(cand, cfg) -> dict:
     """Crisis windows. NaN = the series never traded that window = pass by absence
     (see the module docstring); every covered slice still has to clear the hard
-    floor, and at least GATE_REGIME_MIN_OK of the four must clear the soft one."""
+    floor, and at least GATE_REGIME_MIN_OK of the four must clear the soft one.
+
+    PASS-BY-ABSENCE IS BOUNDED BY GATE_REGIME_MIN_COVERED, and that bound is what
+    keeps the inversion honest. Absence means "this genome said nothing about that
+    crisis", which is a fair reason not to fail it — and a terrible reason to pass
+    it wholesale. Since G1 compares window ENDS rather than starts, a candidate
+    whose scored span begins in 2015 is like-for-like with a 1999 champion while
+    covering only COVID and 2022: the other two windows go NaN, count as satisfying
+    both halves, and the gate reports a pass over crises the genome never traded.
+    So a span that covers fewer than GATE_REGIME_MIN_COVERED of the windows fails
+    G8 as UNMEASURABLE — the doctrine every other gate here follows — rather than
+    passing on evidence that does not exist.
+    """
     raw = cand.get("regime_slices")
     if raw is None or len(raw) != len(cfg.GATE_REGIME_WINDOWS):
         return _gate("G8", False, raw, cfg.GATE_REGIME_MAX_LOSS,
@@ -244,42 +272,79 @@ def _g8(cand, cfg) -> dict:
     vals = [_num(v) for v in raw]
     worst = [v for v in vals if v is not None]
     n_ok = sum(1 for v in vals if v is None or v > cfg.GATE_REGIME_SOFT_LOSS)
-    n_absent = sum(1 for v in vals if v is None)
+    covered = len(worst)
+    if covered < cfg.GATE_REGIME_MIN_COVERED:
+        return _gate("G8", False, (covered, len(vals)),
+                     (cfg.GATE_REGIME_MIN_COVERED, len(vals)),
+                     "NOT MEASURABLE — the scored span covers only %d of the %d "
+                     "crisis windows (minimum %d): the other %d would pass by "
+                     "absence, and a gate carried by windows the genome never "
+                     "traded is not a passed gate"
+                     % (covered, len(vals), cfg.GATE_REGIME_MIN_COVERED,
+                        len(vals) - covered))
     passed = (all(v >= cfg.GATE_REGIME_MAX_LOSS for v in worst)
               and n_ok >= cfg.GATE_REGIME_MIN_OK)
     return _gate("G8", passed, (min(worst) if worst else None, n_ok),
                  (cfg.GATE_REGIME_MAX_LOSS, cfg.GATE_REGIME_MIN_OK),
-                 "%d of %d windows covered; %d above %.0f%%, worst %s"
-                 % (len(worst), len(vals), n_ok, 100 * cfg.GATE_REGIME_SOFT_LOSS,
+                 "%d of %d windows covered (minimum %d); %d above %.0f%%, worst %s"
+                 % (covered, len(vals), cfg.GATE_REGIME_MIN_COVERED, n_ok,
+                    100 * cfg.GATE_REGIME_SOFT_LOSS,
                     "n/a" if not worst else "%+.1f%%" % (100 * min(worst))))
 
 
 def _g9(cand, inc, cfg) -> dict:
     """Beats the incumbent, or there is no reason to change anything.
 
+    BOTH HALVES ARE MEASURED ON THE CALENDAR THE TWO PARTIES SHARE, and the margin
+    half is why this docstring is long. G1 pins both parties to the same market and
+    the same last bar but deliberately NOT to the same first bar (see _g1: scoring
+    starts at each genome's own first active bar, and demanding equal starts would
+    lock every other family out of dethroning a champion forever). A challenger
+    whose history begins in 2015 is therefore like-for-like with a champion scored
+    from 1999 — and its own full-window Sharpe covers a single bull run while the
+    incumbent's covers the dot-com bust, 2008 and 2020. Comparing each party's own
+    full-window number would let the SHORTER CALENDAR pay the margin, and the gate
+    would promote a genome for the crises it was never asked to survive. So
+    run_deepeval measures both Sharpes on the intersection of the two scored spans
+    (evaluate.shared_span_sharpes) and hands them here; the rolling-window half has
+    always intersected (evaluate.rolling_window_wins). The candidate carries BOTH
+    numbers because the intersection belongs to the PAIR: one incumbent is compared
+    against every candidate, and each shares a different span with it.
+
+    The full-window Sharpes stay in the note — never in the comparison — so a
+    reader can see what the calendar was worth.
+
     Both halves are STRICT wins. DESIGN writes the margin with a >=, but the gate
     is named "beats" and the standing rule is that ties go to the incumbent, so a
     candidate that lands exactly on incumbent + margin has not beaten it. The
     rolling-window fraction keeps its >= (it is a proportion threshold, not a
-    head-to-head), and the individual windows behind it are already strict wins —
-    see evaluate.rolling_window_wins.
+    head-to-head), and the individual windows behind it are already strict wins.
     """
     if inc is None:
         return _gate("G9", True, None, 0.0,
                      "skipped: nothing has ever been promoted, so the margin is 0 "
                      "(docs/DESIGN.md G9)")
-    cand_sr, inc_sr = _num(cand.get("sharpe")), _num(inc.get("sharpe"))
+    cand_sr = _num(cand.get("sharpe_shared"))
+    inc_sr = _num(cand.get("incumbent_sharpe_shared"))
     frac = _num(cand.get("rolling_win_frac"))
+    full = "full windows %s / %s" % (_fmt_sr(cand.get("sharpe")),
+                                     _fmt_sr(inc.get("sharpe")))
     if cand_sr is None or inc_sr is None:
         return _gate("G9", False, (cand_sr, inc_sr), cfg.GATE_BEAT_SR_MARGIN,
-                     "a missing Sharpe on either side cannot beat anything")
+                     "NOT MEASURABLE — %s. An unmeasured gate is not a passed gate "
+                     "(%s)" % (cand.get("shared_note")
+                               or "no shared-calendar Sharpe pair was supplied, so "
+                                  "the margin would be a comparison of two "
+                                  "different periods", full))
     beats = cand_sr > inc_sr + cfg.GATE_BEAT_SR_MARGIN
     wins = frac is not None and frac >= cfg.GATE_ROLLING_WIN_FRAC
     return _gate("G9", beats and wins, (cand_sr - inc_sr, frac),
                  (cfg.GATE_BEAT_SR_MARGIN, cfg.GATE_ROLLING_WIN_FRAC),
-                 "candidate %+.2f vs incumbent %+.2f over %s rolling %d-year windows"
-                 % (cand_sr, inc_sr, cand.get("rolling_n_windows", "?"),
-                    cfg.GATE_ROLLING_WINDOW_YEARS))
+                 "candidate %+.2f vs incumbent %+.2f on the %s days both were "
+                 "scored, over %s rolling %d-year windows (%s)"
+                 % (cand_sr, inc_sr, cand.get("shared_days", "?"),
+                    cand.get("rolling_n_windows", "?"),
+                    cfg.GATE_ROLLING_WINDOW_YEARS, full))
 
 
 def _g10(cand, cfg) -> dict:
@@ -306,6 +371,11 @@ def evaluate_gates(cand: dict, inc=None, cfg=config) -> dict:
         boot_ci_lo, boot_ci_hi                                      G6
         sharpe_stress                                               G7
         regime_slices       one cumulative return per config window G8
+        sharpe_shared, incumbent_sharpe_shared, shared_days         G9
+                            BOTH parties' Sharpe over the dates they share, and
+                            how many those were. On the CANDIDATE, because the
+                            intersection differs per candidate; without them the
+                            margin is unmeasured and G9 fails.
         rolling_win_frac    share of rolling windows won vs `inc`   G9
         p_ruin                                                      G10
     """
@@ -379,6 +449,10 @@ if __name__ == "__main__":
         "boot_ci_lo": 0.31, "boot_ci_hi": 1.88, "boot_iters": 5000,
         "sharpe_stress": 0.74,
         "regime_slices": [0.12, -0.03, 0.08, -0.02],
+        # G9's margin: both parties measured on the days they SHARE, never on
+        # their own full windows (see _g9).
+        "sharpe_shared": 1.08, "incumbent_sharpe_shared": 0.82,
+        "shared_days": 4932, "shared_window": ("1999-01-04", "2019-12-31"),
         "rolling_win_frac": 0.71, "rolling_n_windows": 45,
         "p_ruin": 0.02,
     }
@@ -398,7 +472,10 @@ if __name__ == "__main__":
               ("G6", {"boot_ci_lo": 0.0}),
               ("G7", {"sharpe_stress": 0.4 * PASSING["sharpe"]}),
               ("G8", {"regime_slices": [-0.31, -0.03, 0.08, -0.02]}),
-              ("G9", {"sharpe": INCUMBENT["sharpe"] + config.GATE_BEAT_SR_MARGIN}),
+              ("G8 (coverage)", {"regime_slices": [float("nan"), float("nan"),
+                                                   0.08, -0.02]}),
+              ("G9", {"sharpe_shared": PASSING["incumbent_sharpe_shared"]
+                      + config.GATE_BEAT_SR_MARGIN}),
               ("G10", {"p_ruin": config.GATE_RUIN_MAX_PROB})]
     for gid, patch in breaks:
         rep = evaluate_gates(dict(PASSING, **patch), INCUMBENT)
@@ -409,6 +486,17 @@ if __name__ == "__main__":
     print("\n  no incumbent : all_pass %s, G9 %s (%s)"
           % (solo["all_pass"], "PASS" if solo["gates"]["G9"]["pass"] else "FAIL",
              solo["gates"]["G9"]["detail"]))
-    tie = evaluate_gates(dict(PASSING, sharpe=INCUMBENT["sharpe"]), INCUMBENT)
+    tie = evaluate_gates(dict(PASSING, sharpe_shared=PASSING["incumbent_sharpe_shared"]),
+                         INCUMBENT)
     print("  exact tie    : G9 %s — ties go to the incumbent, always"
           % ("PASS" if tie["gates"]["G9"]["pass"] else "FAIL"))
+    # A short-history challenger: a flattering full-window Sharpe measured over an
+    # era without the crises, and empty regime slices to match. G8 and G9 are the
+    # two gates that must not be fooled by a calendar.
+    short = evaluate_gates(dict(PASSING, sharpe=2.40, sharpe_stress=1.60,
+                                sharpe_shared=0.79,
+                                regime_slices=[float("nan"), float("nan"), 0.08, -0.02]),
+                           INCUMBENT)
+    print("  2015-start   : failed %s (full-window SR +2.40 over an era without the "
+          "crises; +0.79 on the days it shares with the champion)"
+          % ", ".join(short["failed"]))

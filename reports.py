@@ -148,12 +148,20 @@ def _promotion_evidence(subject: dict) -> dict:
     the pointer's copy is the fallback when that record is gone. Either way the
     generation the gates ran in is returned as `gates_generation` and the
     re-simulation as `resim_record`, so the report can say which week is which.
+
+    WHICH GENERATION TO LOOK IN is the pointer's `gates_generation` — when the
+    evidence was measured — not its `generation`, which is when the pointer last
+    moved. The two differ after a rollback: the pointer moves this week and the
+    gates it points at were run whenever that genome was promoted. An explicit
+    None means the registry has no promotion on record for this hash, and that is
+    NOT a reason to fall back to `generation` — a battery labelled with the wrong
+    week is the mislabelling this function exists to refuse.
     """
     record = subject.get("record") or {}
     if record.get("gate_report"):
         return subject                       # a real evaluation: nothing to fall back to
     meta = subject.get("champion_meta") or {}
-    gen = meta.get("generation")
+    gen = meta["gates_generation"] if "gates_generation" in meta else meta.get("generation")
     promo = _eval_for(subject["artifact"], gen) if gen is not None else {}
     if not promo.get("gate_report") or int(promo.get("generation", -1)) != int(gen):
         # _eval_for falls back to "any record" when the generation has none, so a

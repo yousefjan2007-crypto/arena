@@ -329,6 +329,15 @@ GATE_REGIME_WINDOWS = [
 GATE_REGIME_MAX_LOSS = -0.30        # G8  no slice may lose more than this
 GATE_REGIME_SOFT_LOSS = -0.05       # G8  at least GATE_REGIME_MIN_OK slices above this
 GATE_REGIME_MIN_OK = 3
+# G8  and at least this many of the windows must actually be COVERED by the
+# scored span. An uncovered slice passes by absence — failing a genome for a
+# crisis it never traded would be inventing evidence — but absence may not be
+# what earns the quorum above. Without this floor a candidate whose history
+# begins in 2015 waives the dot-com and 2008 windows for free and clears G8 on
+# COVID and 2022 alone, which is the gate agreeing it survived crises it never
+# saw. Three of four is the same bar GATE_REGIME_MIN_OK sets: one window may be
+# missing, not most of them.
+GATE_REGIME_MIN_COVERED = 3
 GATE_BEAT_SR_MARGIN = 0.15          # G9  challenger must beat the incumbent by this
 GATE_ROLLING_WIN_FRAC = 0.60        # G9  and win this share of rolling windows
 GATE_ROLLING_WINDOW_YEARS = 3

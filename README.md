@@ -86,9 +86,18 @@ candidate is refused.
 | G5 | CPCV, 28 paths | ≥ 70% net-positive, median path Sharpe ≥ 0.30 |
 | G6 | bootstrap 95% CI of net Sharpe | lower bound > 0 |
 | G7 | 2× cost stress (borrow 3×) | Sharpe > 0 and ≥ 0.5× base |
-| G8 | four crisis windows | none worse than −30%, ≥3 of 4 above −5% |
-| G9 | beats the incumbent | +0.15 Sharpe and ≥60% of rolling 3-year windows |
+| G8 | four crisis windows | ≥3 of 4 covered by the scored span, none worse than −30%, ≥3 of 4 above −5% |
+| G9 | beats the incumbent | +0.15 Sharpe **on the calendar both were scored on** and ≥60% of rolling 3-year windows |
 | G10 | ruin Monte Carlo | P(drawdown > 40% in 2 years) < 5% |
+
+G8 and G9 are worded that way because a challenger may legitimately have less
+history than the champion (G1 compares the window's END, not its start, or the
+first promotion would lock every other strategy family out forever). A genome
+first active in 2015 has no dot-com bust, no 2008 and no 2020 in its record —
+which flatters its Sharpe and empties its crisis slices at the same time. So the
+margin is measured only over days both parties actually traded, and a span that
+misses most of the crisis windows fails G8 as unmeasurable rather than passing
+by absence.
 
 The gates have already refused. `state/deepeval_history.csv` records the
 refusals with the failing gate IDs, and the latest report shows every value

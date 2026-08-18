@@ -279,13 +279,29 @@ synthetic paths (200 seeded, 2-yr horizon).
 | G5 | CPCV 28 paths | ≥ 70% net-positive; median path Sharpe ≥ 0.30 |
 | G6 | Bootstrap 95% CI of net Sharpe | lower bound > 0 |
 | G7 | 2× cost stress | Sharpe > 0 and ≥ 0.5× base |
-| G8 | Regime slices (2000–02, 2008–09, 2020H1, 2022) | no slice < −30%; ≥3 of 4 > −5% |
-| G9 | Beats incumbent | net Sharpe ≥ incumbent+0.15 same-window AND wins ≥60% of rolling 3-yr windows (skip if none) |
+| G8 | Regime slices (2000–02, 2008–09, 2020H1, 2022) | ≥3 of 4 windows COVERED by the scored span; no slice < −30%; ≥3 of 4 > −5% |
+| G9 | Beats incumbent | net Sharpe > incumbent+0.15, **both measured on the calendar the two parties share**, AND wins ≥60% of rolling 3-yr windows (skip if none) |
 | G10 | Ruin MC | P(DD > 40% in 2 yrs) < 5% |
+
+**Short-history challengers are why G8 and G9 are written that way.** G1 compares
+window ENDS rather than starts, so a genome first active in 2015 is legitimately
+like-for-like with a champion scored from 1999 — it simply has less history. Every
+comparison downstream must then stand on ground they both cover, or the shorter
+calendar becomes the edge: an era without the dot-com bust, 2008 and 2020 flatters
+a Sharpe (G9) and empties the crisis slices at the same time (G8), and the two
+effects compound into a promotion earned by absence. So G9 measures **both**
+parties on the intersection of their scored spans (`evaluate.shared_span_sharpes`;
+the rolling-window half has always intersected), and G8 refuses to be carried by
+windows the genome never traded — an uncovered slice still passes by absence, but
+fewer than `GATE_REGIME_MIN_COVERED` covered and the gate fails as unmeasurable.
 
 Promotion repoints `champion.json` to the immutable artifact (lineage: parent
 hash, mutation, birth generation, eval window, gate report). Rollback =
-repoint to any prior hash.
+repoint to any prior hash. The pointer records **two** generations, which only a
+rollback separates: `generation` is when the pointer moved, `gates_generation` is
+when the evidence behind it was measured (for a promotion they are the same
+number; for a rollback the gates were run in the reinstated genome's own promotion
+week, and `reports.py` labels the page with it).
 
 ## Graduation ladder (learning never stops)
 

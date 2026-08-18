@@ -1041,6 +1041,12 @@ PASSING_CAND = {
     "boot_ci_lo": 0.31, "boot_ci_hi": 1.88,
     "sharpe_stress": 0.74,
     "regime_slices": [0.12, -0.03, 0.08, -0.02],
+    # G9's margin is measured on the calendar the two parties SHARE, so both
+    # parties' shared-span Sharpes ride on the CANDIDATE (the intersection differs
+    # per candidate). run_deepeval.f2_metrics fills these from
+    # evaluate.shared_span_sharpes; a dict without them fails G9 as unmeasured.
+    "sharpe_shared": 1.08, "incumbent_sharpe_shared": 0.82,
+    "shared_days": 4932, "shared_window": ("1999-01-04", "2019-12-31"),
     "rolling_win_frac": 0.71, "rolling_n_windows": 45,
     "p_ruin": 0.02,
 }
@@ -1059,6 +1065,22 @@ GATE_VIOLATIONS = [
     ("G9", {"rolling_win_frac": config.GATE_ROLLING_WIN_FRAC - 0.001}),
     ("G10", {"p_ruin": config.GATE_RUIN_MAX_PROB}),
 ]
+
+# A challenger with a SHORT HISTORY: first active in 2015, so its scored span
+# misses the dot-com and 2008 windows entirely and shares only the 2015-2019 tail
+# with a champion scored from 1999. Its own full-window Sharpe is spectacular
+# because the era it covers holds no crisis; on the days both parties actually
+# traded it is worse than the incumbent. Every number here is otherwise the
+# passing candidate's, so whatever fails is failing on the CALENDAR.
+SHORT_HISTORY_CAND = dict(
+    PASSING_CAND,
+    hash="short0000001",
+    window=("2015-01-02", "2019-12-31"),
+    sharpe=2.40, sharpe_stress=1.60,
+    sharpe_shared=0.79, incumbent_sharpe_shared=0.88,
+    shared_days=1258, shared_window=("2015-01-02", "2019-12-31"),
+    regime_slices=[float("nan"), float("nan"), 0.08, -0.02],
+)
 
 
 def test_gates():
@@ -1088,10 +1110,13 @@ def test_gates():
                     for g, good in blocked))
 
     # A tie is not a win: the candidate matches the incumbent exactly, and again
-    # at exactly the required margin. Neither may promote.
-    tie = gates.evaluate_gates(dict(PASSING_CAND, sharpe=PASSING_INC["sharpe"]), PASSING_INC)
+    # at exactly the required margin. Neither may promote. (Both patches move the
+    # SHARED-span Sharpe, which is the number G9 compares — see the asymmetric-span
+    # checks below for why the full-window one may not be.)
+    shared_inc = PASSING_CAND["incumbent_sharpe_shared"]
+    tie = gates.evaluate_gates(dict(PASSING_CAND, sharpe_shared=shared_inc), PASSING_INC)
     on_margin = gates.evaluate_gates(
-        dict(PASSING_CAND, sharpe=PASSING_INC["sharpe"] + config.GATE_BEAT_SR_MARGIN),
+        dict(PASSING_CAND, sharpe_shared=shared_inc + config.GATE_BEAT_SR_MARGIN),
         PASSING_INC)
     check("a tie goes to the incumbent (G9 is a strict beat)",
           not tie["gates"]["G9"]["pass"] and not on_margin["gates"]["G9"]["pass"]
@@ -1149,6 +1174,52 @@ def test_gates():
     check("...and an incumbent with no readable window fails G1 rather than skipping it",
           not no_inc_window["gates"]["G1"]["pass"] and no_inc_window["failed"] == ["G1"],
           no_inc_window["gates"]["G1"]["detail"][:88])
+
+    # WHAT G1'S END-ONLY RULE HANDS TO G8 AND G9: a challenger with a SHORT
+    # HISTORY. Passing G1 on the window end is correct — a 2015-start genome is
+    # measured on the same market to the same last bar — but everything downstream
+    # that compares it to a 1999-start champion now has to be measured over ground
+    # they BOTH stand on. Two gates would otherwise pay it for the calendar:
+    #   G9 — its own full-window Sharpe covers an era with no dot-com bust, no
+    #        2008 and no 2020, so the margin over the incumbent's full-history
+    #        number is bull-market arithmetic. On the days they share it LOSES.
+    #   G8 — the crisis windows it never traded come back NaN, pass by absence,
+    #        and the gate reports a survivor of crises it never saw.
+    short = gates.evaluate_gates(SHORT_HISTORY_CAND, PASSING_INC)
+    full_window_margin = SHORT_HISTORY_CAND["sharpe"] - PASSING_INC["sharpe"]
+    would_have_passed = full_window_margin > config.GATE_BEAT_SR_MARGIN
+    check("a short-history challenger's bull-era Sharpe does not beat the champion (G9)",
+          would_have_passed and not short["gates"]["G9"]["pass"]
+          and "days both were scored" in short["gates"]["G9"]["detail"],
+          "full windows %+.2f vs %+.2f (margin %+.2f would have PASSED); shared "
+          "span %+.2f vs %+.2f over %d days -> G9 FAIL"
+          % (SHORT_HISTORY_CAND["sharpe"], PASSING_INC["sharpe"], full_window_margin,
+             SHORT_HISTORY_CAND["sharpe_shared"],
+             SHORT_HISTORY_CAND["incumbent_sharpe_shared"],
+             SHORT_HISTORY_CAND["shared_days"]))
+    check("...and the crisis windows it never traded cannot carry G8 either",
+          not short["gates"]["G8"]["pass"]
+          and "NOT MEASURABLE" in short["gates"]["G8"]["detail"]
+          and set(short["failed"]) == {"G8", "G9"},
+          short["gates"]["G8"]["detail"][:112])
+    # The margin is measured, or it is not measured. A candidate that arrives
+    # without the shared-calendar pair has no comparable number at all, and G9
+    # fails rather than falling back to the two full windows.
+    no_shared = gates.evaluate_gates(
+        {k: v for k, v in PASSING_CAND.items()
+         if k not in ("sharpe_shared", "incumbent_sharpe_shared")}, PASSING_INC)
+    check("...and a candidate with no shared-span pair fails G9 as unmeasured",
+          not no_shared["gates"]["G9"]["pass"] and no_shared["failed"] == ["G9"]
+          and "NOT MEASURABLE" in no_shared["gates"]["G9"]["detail"],
+          no_shared["gates"]["G9"]["detail"][:104])
+    # Pass-by-absence SURVIVES inside the bound: one missing window is still not a
+    # failure, which is the half of the rule that keeps G8 from inventing evidence.
+    one_absent = gates.evaluate_gates(
+        dict(PASSING_CAND, regime_slices=[float("nan"), -0.03, 0.08, -0.02]), PASSING_INC)
+    check("one uncovered window still passes G8 by absence (the bound is %d of %d)"
+          % (config.GATE_REGIME_MIN_COVERED, len(config.GATE_REGIME_WINDOWS)),
+          one_absent["gates"]["G8"]["pass"] and one_absent["all_pass"],
+          one_absent["gates"]["G8"]["detail"][:96])
 
     # No incumbent: G9 is skipped (nothing to beat) and G1 has nothing to compare
     # against, so it degrades to "is this candidate's own identity complete". The
@@ -1327,25 +1398,77 @@ def test_gates():
         shutil.rmtree(tmp3, ignore_errors=True)
 
     # ── the two F2 inputs whose rules are not obvious from their signatures ────
-    # A series that covers the 2000-02 and 2008-09 windows and stops long before
-    # the two vault-era ones: exactly the shape a pre-vault-only evaluation has.
-    dates = pd.bdate_range("1999-01-04", periods=3000)      # ends 2010: no 2020, no 2022
+    # Absence measured from a REAL dated series rather than a hand-built dict, so
+    # what is being tested is the rule and not the fixture. A series that stops in
+    # 2020 covers three of the four windows and says nothing about 2022: NaN, which
+    # is not a failure — the genome never traded it, and failing it there would be
+    # inventing evidence the same way passing it would.
+    dates = pd.bdate_range("1999-01-04", periods=5700)      # ends late 2020: no 2022
     net = np.full(len(dates), 0.0002)
     vals = evaluate.regime_slices(net, dates)
     days = evaluate.regime_slice_days(dates)
     absent = [i for i, v in enumerate(vals) if np.isnan(v)]
     rep = gates.evaluate_gates(dict(PASSING_CAND, regime_slices=vals), PASSING_INC)
     check("G8 passes by absence: an uncovered window is NaN, and NaN is not a failure",
-          absent == [2, 3] and days[2] == 0 and days[3] == 0 and rep["gates"]["G8"]["pass"],
+          absent == [3] and days[3] == 0 and all(days[i] > 0 for i in (0, 1, 2))
+          and rep["gates"]["G8"]["pass"],
           "windows %s uncovered by a series ending %s; G8 %s"
           % (absent, dates[-1].date(), rep["gates"]["G8"]["detail"]))
+    # ...but absence may not be what CARRIES the gate. The same series cut short in
+    # 2010 covers two of four, and two crisis windows waived for free is a pass
+    # about a genome nobody measured through a crisis.
+    short_dates = pd.bdate_range("1999-01-04", periods=3000)          # ends 2010
+    short_vals = evaluate.regime_slices(np.full(len(short_dates), 0.0002), short_dates)
+    rep_short = gates.evaluate_gates(dict(PASSING_CAND, regime_slices=short_vals),
+                                     PASSING_INC)
+    check("...but a span covering too few windows fails G8 as unmeasurable",
+          [i for i, v in enumerate(short_vals) if np.isnan(v)] == [2, 3]
+          and not rep_short["gates"]["G8"]["pass"]
+          and rep_short["failed"] == ["G8"],
+          "a series ending %s covers %d of %d windows (minimum %d): %s"
+          % (short_dates[-1].date(),
+             sum(1 for v in short_vals if not np.isnan(v)), len(short_vals),
+             config.GATE_REGIME_MIN_COVERED, rep_short["gates"]["G8"]["detail"][:72]))
     hard = list(vals)
     hard[0] = config.GATE_REGIME_MAX_LOSS - 0.01
-    check("...but a COVERED window below the floor still fails G8",
+    check("...and a COVERED window below the floor still fails G8",
           not gates.evaluate_gates(dict(PASSING_CAND, regime_slices=hard),
                                    PASSING_INC)["gates"]["G8"]["pass"],
           "slice 0 at %.0f%% (floor %.0f%%)"
           % (100 * hard[0], 100 * config.GATE_REGIME_MAX_LOSS))
+
+    # G9's margin, at the source. The gate can only compare what run_deepeval
+    # measures, so the intersection has to happen in evaluate.shared_span_sharpes:
+    # a champion scored from 1999 whose good years are BEHIND it, and a challenger
+    # that only exists for the quiet tail. The incumbent's number the gate sees
+    # must be the one measured on the tail, not the one its whole history earned.
+    rng_s = np.random.default_rng(config.SEED)
+    inc_dates = pd.bdate_range("1999-01-04", periods=4200)          # ~1999-2015
+    cand_dates = inc_dates[-600:]                                   # the tail only
+    inc_net = np.concatenate([rng_s.normal(0.0010, 0.008, len(inc_dates) - 600),
+                              rng_s.normal(0.0001, 0.008, 600)])
+    cand_net = rng_s.normal(0.0004, 0.008, len(cand_dates))
+    span = evaluate.shared_span_sharpes(cand_net, cand_dates, inc_net, inc_dates)
+    inc_full = evaluate.sharpe(inc_net)
+    inc_tail = evaluate.sharpe(inc_net[-600:])
+    check("G9's margin is measured on the calendar both parties share",
+          span["n_common_days"] == len(cand_dates)
+          and abs(span["inc_sharpe"] - inc_tail) < 1e-9
+          and abs(span["cand_sharpe"] - evaluate.sharpe(cand_net)) < 1e-9
+          and abs(inc_full - inc_tail) > 0.5,
+          "%d shared days (%s .. %s): incumbent %+.2f over the shared span, %+.2f "
+          "over its own full history — the gate reads the first"
+          % (span["n_common_days"], span["start"], span["end"],
+             span["inc_sharpe"], inc_full))
+    thin = evaluate.shared_span_sharpes(cand_net[:5], cand_dates[:5], inc_net, inc_dates)
+    thin_rep = gates.evaluate_gates(
+        dict(PASSING_CAND, sharpe_shared=thin["cand_sharpe"],
+             incumbent_sharpe_shared=thin["inc_sharpe"], shared_note=thin["note"]),
+        PASSING_INC)
+    check("...and too few shared days is unmeasured, not a comparison",
+          all(np.isnan(thin[k]) for k in ("cand_sharpe", "inc_sharpe"))
+          and thin_rep["failed"] == ["G9"],
+          "%d shared days -> NaN pair; %s" % (thin["n_common_days"], thin["note"][:72]))
 
     rng_net = np.random.default_rng(config.SEED).normal(0.0006, 0.01, 1200)
     ci_a = evaluate.bootstrap_sharpe_ci(rng_net, n=400, rng=np.random.default_rng(99))
@@ -1437,6 +1560,49 @@ def test_gates():
               "resim_record" not in plain and "gates_generation" not in plain
               and (plain["record"].get("gate_report") or {}).get("all_pass"),
               "generation 4 reports its own battery, with no fallback label")
+
+        # A ROLLBACK SPLITS THE POINTER'S TWO GENERATIONS APART. A challenger takes
+        # the seat in 6; a human puts the old genome back in 7. The pointer moved in
+        # 7 and the gates behind the genome it now points at were run in 4, and
+        # champion.json has to say both — storing 7 (or the outgoing champion's
+        # number) as the evidence generation sends _promotion_evidence looking for a
+        # battery that generation never ran, and the champion's page silently loses
+        # the one line that says which week its numbers came from.
+        registry.promote("challenger01", 6, promo_report, "a challenger took the seat",
+                         state_dir=tmp4)
+        rolled = registry.rollback(entry["hash"], "verify rollback", generation=7,
+                                   state_dir=tmp4, artifact_dir=arts4)
+        sub_rb = reports.report_subject(7, state_dir=tmp4, artifact_dir=arts4)
+        reports.benchmark_curve = lambda dates: pd.Series(dtype=float)
+        try:
+            path_rb = reports.build_report(7, state_dir=tmp4, artifact_dir=arts4,
+                                           output_dir=out4)
+        finally:
+            reports.benchmark_curve = real_curve
+        with open(path_rb) as f:
+            text_rb = f.read()
+        g4_rb = [ln for ln in text_rb.splitlines() if ln.startswith("| G4 ")]
+        check("a rollback records the reinstated genome's OWN promotion generation",
+              rolled["generation"] == 7 and rolled["gates_generation"] == 4
+              and registry.promotion_generation(entry["hash"], tmp4, arts4) == 4,
+              "pointer moved in generation %s; its gates were run in generation %s"
+              % (rolled["generation"], rolled["gates_generation"]))
+        check("...so the rollback week's report still carries the honest gate label",
+              sub_rb.get("gates_generation") == 4
+              and "gates were last run in generation 4" in text_rb
+              and "not evaluated" not in text_rb
+              and "gate G4 fails on that alone" not in text_rb
+              and len(g4_rb) == 1 and "PASS" in g4_rb[0],
+              "generation-7 page, generation-4 evidence, labelled as such; G4 row: %s"
+              % (g4_rb[0].strip() if g4_rb else "MISSING"))
+        # ...and a hash the registry never promoted gets None rather than a number
+        # that would label somebody else's battery as this genome's evidence.
+        never = registry.rollback("neverpromoted", "verify rollback of a stranger",
+                                  generation=8, state_dir=tmp4, artifact_dir=arts4)
+        check("...while a genome with no promotion on record claims no generation",
+              never["gates_generation"] is None
+              and registry.promotion_generation("neverpromoted", tmp4, arts4) is None,
+              "no gates_passed row and no all-pass battery on file -> None, not 8")
     finally:
         shutil.rmtree(tmp4, ignore_errors=True)
 

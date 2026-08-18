@@ -523,20 +523,65 @@ def champion_history(state_dir=None) -> list:
         return list(csv.DictReader(f))
 
 
+def promotion_generation(ghash: str, state_dir=None, artifact_dir=None):
+    """The generation whose GATES put `ghash` in the champion seat, or None.
+
+    Two sources, in order, and both are records rather than inferences:
+
+      1. champion_history.csv — the last row that moved the pointer TO this hash
+         because gates passed. _repoint's read-back makes that log complete by
+         construction: no pointer has ever moved without one.
+      2. the artifact's own evaluation records — the newest one carrying an
+         all-pass gate report. The fallback for a hash promoted before this log
+         existed, or under a state dir that no longer has it.
+
+    None means the honest answer: this genome has no promotion on record. A
+    caller may NOT substitute the current generation for it — that is exactly the
+    mislabelling reports._promotion_evidence refuses to print.
+    """
+    for row in reversed(champion_history(state_dir)):
+        if row.get("new_hash") == str(ghash) and row.get("reason") == "gates_passed":
+            try:
+                return int(row["generation"])
+            except (KeyError, TypeError, ValueError):
+                break
+    art = load_artifact(ghash, artifact_dir)
+    passed = [rec for rec in (art.get("evals") or {}).values()
+              if (rec.get("gate_report") or {}).get("all_pass")] if art else []
+    if not passed:
+        return None
+    best = max(enumerate(passed), key=lambda iv: (int(iv[1].get("filed_seq", 0)), iv[0]))[1]
+    try:
+        return int(best["generation"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _repoint(ghash: str, generation: int, reason: str, note: str, gate_report,
-             state_dir=None) -> dict:
+             state_dir=None, gates_generation=None) -> dict:
     """Rewrite champion.json and append the history row. Never called directly.
 
     THE READ-BACK IS THE POINT. Two files have to agree — the pointer and the
     log — and the only failure this project cannot tolerate is a pointer that
     moved without the log saying so. So both are written, then both are read
     back, and a disagreement raises instead of being reported as success.
+
+    TWO GENERATIONS, BECAUSE A ROLLBACK SPLITS THEM APART. `generation` is WHEN
+    THE POINTER MOVED — arena's clock is the generation counter, and a history row
+    nobody can place in time is not an audit trail. `gates_generation` is WHEN THE
+    EVIDENCE WAS MEASURED. For a promotion they are the same number and always
+    will be. For a rollback they are not: the pointer moves this week, the gates it
+    moves to were run whenever that genome was promoted, and reports.py needs the
+    second number to label the champion's page "the gates were last run in
+    generation N" instead of hunting for a battery that generation never ran.
     """
     prev = champion(state_dir)
     prev_hash = prev[0] if prev else ""
     meta = {"note": CHAMPION_NOTE,
             "hash": str(ghash),
             "generation": int(generation),
+            "gates_generation": (None if gates_generation is None
+                                 else int(gates_generation)),
             "reason": reason,
             "detail": note,
             "previous_hash": prev_hash,
@@ -576,20 +621,36 @@ def promote(ghash: str, generation: int, gate_report, note: str = "",
     if gate_report is not None and not gate_report.get("all_pass", False):
         raise ValueError("promote() refuses a gate report that did not pass: "
                          "failed %s" % ", ".join(gate_report.get("failed", [])))
-    return _repoint(ghash, generation, "gates_passed", note, gate_report, state_dir)
+    return _repoint(ghash, generation, "gates_passed", note, gate_report, state_dir,
+                    gates_generation=generation)
 
 
-def rollback(ghash: str, reason: str, generation: int = None, state_dir=None) -> dict:
+def rollback(ghash: str, reason: str, generation: int = None, state_dir=None,
+             artifact_dir=None) -> dict:
     """Repoint the champion at any prior hash. Same mechanics as promote().
 
     A rollback carries no gate report — it is a human decision to stop trusting
     the current champion, not a claim that the old one just passed something —
     and `reason` is recorded verbatim beside the row.
+
+    THE POINTER RECORDS TWO DIFFERENT GENERATIONS AND THEY MUST NOT BE CONFUSED.
+    `generation` is when the rollback HAPPENED (the caller passes it;
+    run_deepeval.do_rollback passes latest_generation()). The evidence behind the
+    reinstated genome, though, is its OWN promotion week — so that is looked up
+    with promotion_generation() and stored as `gates_generation`. Storing the
+    outgoing champion's number there, as this used to, left champion.json claiming
+    the reinstated genome's gates ran in a generation they did not:
+    reports._promotion_evidence then finds no battery under that label, silently
+    drops the "gates last run in generation N" line, and the champion's page loses
+    the one sentence that says which week its numbers came from. None is a legal
+    answer (nothing on record ever promoted this hash) and reports.py prints
+    nothing rather than guessing.
     """
     if generation is None:
         prev = champion(state_dir)
         generation = int(prev[1].get("generation", 0)) if prev else 0
-    return _repoint(ghash, generation, "rollback", reason, None, state_dir)
+    return _repoint(ghash, generation, "rollback", reason, None, state_dir,
+                    gates_generation=promotion_generation(ghash, state_dir, artifact_dir))
 
 
 if __name__ == "__main__":
@@ -685,10 +746,14 @@ if __name__ == "__main__":
         h, meta = champion(state)
         print("  promoted   : %s <- %s (gen %d, %s)"
               % (h, meta["previous_hash"], meta["generation"], meta["reason"]))
-        rollback(entries[0]["hash"], "smoke-test rollback", state_dir=state)
+        rollback(entries[0]["hash"], "smoke-test rollback", generation=9, state_dir=state)
         h2, meta2 = champion(state)
         print("  rolled back: %s (was %s), reason %s / %s"
               % (h2, meta2["previous_hash"], meta2["reason"], meta2["detail"]))
+        # The two generations a rollback splits apart: the pointer moved in 9, the
+        # gates behind the genome it now points at were run in 7.
+        print("               pointer moved in generation %s; its gates were run in "
+              "generation %s" % (meta2["generation"], meta2["gates_generation"]))
         print("  history    : %d rows" % len(champion_history(state)))
         for row in champion_history(state):
             print("      gen %-3s %-12s -> %-12s %-13s %s"

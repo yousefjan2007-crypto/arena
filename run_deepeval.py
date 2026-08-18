@@ -291,8 +291,26 @@ def f2_metrics(entry, res, market, cost, generation, index, cohort, incumbent_re
     out["p_ruin"] = ruin["p_ruin"]
     out["ruin_detail"] = ruin
 
-    # G9 — only measurable against an incumbent.
+    # G9 — only measurable against an incumbent, and only over the calendar the
+    # two parties SHARE. Both halves of the gate are measured on that intersection:
+    # the margin here, the rolling windows in rolling_window_wins. The intersection
+    # is a property of the PAIR, not of either party, so both numbers are stored on
+    # the candidate — one incumbent dict is compared against every candidate, and
+    # each of those candidates shares a different span with it.
     if incumbent_res is not None:
+        shared = evaluate.shared_span_sharpes(net, res["dates"],
+                                              incumbent_res["daily_net"],
+                                              incumbent_res["dates"])
+        out["sharpe_shared"] = shared["cand_sharpe"]
+        out["incumbent_sharpe_shared"] = shared["inc_sharpe"]
+        # The incumbent's FULL-window Sharpe, stored beside the shared-span pair so
+        # the artifact carries both comparisons and a reader can see the gap the
+        # calendar was worth.
+        out["incumbent_sharpe"] = evaluate.sharpe(incumbent_res["daily_net"])
+        out["shared_days"] = shared["n_common_days"]
+        out["shared_window"] = (shared["start"], shared["end"])
+        out["shared_note"] = shared["note"]
+        out["shared_detail"] = shared
         wins = evaluate.rolling_window_wins(net, res["dates"],
                                             incumbent_res["daily_net"],
                                             incumbent_res["dates"])
@@ -324,6 +342,15 @@ def cohort_pbo(cohort: dict, ghash: str) -> tuple:
                          cohort.get("generation", "?")))
     return cohort["pbo"], "cohort of %d genomes, %s splits" % (
         len(cohort["hashes"]), cohort.get("n_splits"))
+
+
+def _sr(value) -> str:
+    """A Sharpe for the log, or "n/a" — never a formatted NaN."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    return "n/a" if math.isnan(out) else "%+.2f" % out
 
 
 def print_candidate(m: dict) -> None:
@@ -360,6 +387,14 @@ def print_candidate(m: dict) -> None:
         print("    vs champ : wins %.0f%% of %d rolling %d-year windows"
               % (100 * m["rolling_win_frac"], m["rolling_n_windows"],
                  config.GATE_ROLLING_WINDOW_YEARS))
+        # The margin G9 acts on, and the two full-window numbers it is NOT allowed
+        # to use: printing both is what makes a calendar advantage visible.
+        print("    shared   : SR %s vs champ %s over %d shared days (%s); full "
+              "windows %s / %s"
+              % (_sr(m.get("sharpe_shared")), _sr(m.get("incumbent_sharpe_shared")),
+                 m.get("shared_days", 0),
+                 " .. ".join(str(v) for v in (m.get("shared_window") or ("?", "?"))),
+                 _sr(m.get("sharpe")), _sr(m.get("incumbent_sharpe"))))
 
 
 # ── persistence ────────────────────────────────────────────────────────────────
@@ -915,9 +950,15 @@ def do_rollback(ghash: str, reason: str) -> int:
     print("  current   : %s" % (current[0] if current else "(none)"))
     # The row records the generation the rollback HAPPENED at, not the one the old
     # champion was promoted at: arena's clock is the generation counter, and a
-    # history row nobody can place in time is not an audit trail.
+    # history row nobody can place in time is not an audit trail. The generation
+    # the REINSTATED genome's gates ran in is a different number and the registry
+    # looks it up separately (registry.promotion_generation), so the champion's
+    # report can still say which week its evidence came from.
     meta = registry.rollback(ghash, reason, generation=latest_generation())
     print("  rolled to : %s (%s)" % (meta["hash"], reason))
+    print("  evidence  : gates last run in generation %s"
+          % ("none on record — its report will claim no gate verdict"
+             if meta["gates_generation"] is None else meta["gates_generation"]))
     print("  history   : %d rows in %s"
           % (len(registry.champion_history()),
              os.path.relpath(registry.history_path(), config.ROOT)))
