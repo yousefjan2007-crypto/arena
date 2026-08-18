@@ -603,15 +603,22 @@ def sweep_orphan_checkpoints(generation: int, state_dir=None, verbose=True) -> d
     exactly the provenance lie IdentityDrift exists to prevent.
 
     A directory for a generation the arena has already passed can never be
-    resumed (the counter only moves forward), so it is removed once swept.
+    resumed (the counter only moves forward), so it is removed once swept — UNLESS
+    something in it could not be read. An unreadable checkpoint is left alone
+    rather than deleted (see the handler below); deleting the directory around it
+    would do exactly what the handler refuses to do, and the episodes it holds
+    would be gone from the only place they were ever recorded, undercounting
+    n_trials() and making every DSR in the project optimistic. Such a directory is
+    kept, reported loudly, and left for a human.
     """
     root = state_dir or config.STATE_DIR
-    stat = {"appended": 0, "already": 0, "unreadable": 0, "removed": 0}
+    stat = {"appended": 0, "already": 0, "unreadable": 0, "removed": 0, "kept": 0}
     for d in sorted(glob.glob(os.path.join(root, "tmp_gen_*"))):
         try:
             gen = int(os.path.basename(d).rsplit("_", 1)[-1])
         except ValueError:
             continue
+        unreadable_here = 0
         for path in sorted(glob.glob(os.path.join(d, "*.npz"))):
             try:
                 with np.load(path, allow_pickle=False) as z:
@@ -625,6 +632,7 @@ def sweep_orphan_checkpoints(generation: int, state_dir=None, verbose=True) -> d
                 # cannot be turned into an honest row; it is still usable as a
                 # resume checkpoint, so it is left alone rather than deleted.
                 stat["unreadable"] += 1
+                unreadable_here += 1
                 continue
             if _ledger_row(gen, entry["hash"], "F1", state_dir) is not None:
                 stat["already"] += 1
@@ -638,7 +646,19 @@ def sweep_orphan_checkpoints(generation: int, state_dir=None, verbose=True) -> d
             if verbose:
                 print("  orphan    : ledgered %s (generation %d, F1, SR %+.2f) from a "
                       "checkpoint no run ever recorded" % (entry["hash"], gen, sharpe))
-        if gen < int(generation):
+        if gen < int(generation) and unreadable_here:
+            # The handler above leaves an unreadable checkpoint ALONE; deleting the
+            # directory it sits in would undo that decision by another route, and
+            # the episodes it holds have no row anywhere else.
+            stat["kept"] += 1
+            if verbose:
+                print("  orphan    : KEPT %s — %d checkpoint(s) there could not be "
+                      "read, so they were never ledgered. Removing the directory "
+                      "would destroy the only record that those episodes ran and "
+                      "leave n_trials() undercounting, which makes every DSR "
+                      "optimistic. Inspect or delete it by hand."
+                      % (os.path.basename(d), unreadable_here))
+        elif gen < int(generation):
             shutil.rmtree(d, ignore_errors=True)
             stat["removed"] += 1
     if verbose and stat["removed"]:
@@ -832,8 +852,18 @@ def run_generation(market, entries, generation: int, cost=None, n_jobs=1, evolve
     # ── F0: screen everything on three pre-vault eras ─────────────────────────
     timing: dict = {}                  # hash -> seconds THIS run spent on it
     have = _ledger_f0(generation, identity, state_dir)
-    todo = [e for e in entries if e["hash"] not in have]
-    out["resumed_f0"] = len(entries) - len(todo)
+    # ONE EPISODE PER HASH, the same rule F1's finalist list follows. evolution
+    # dedups the population it breeds, but a random seed draw can collide, and two
+    # slots holding the same genome must not buy two identical screen episodes:
+    # the ledger's (hash, generation, fidelity) key keeps one row and the second
+    # episode is pure spend. `have` is keyed by hash too, so every entry — copies
+    # included — still gets its result below.
+    todo, queued = [], set()
+    for e in entries:
+        if e["hash"] not in have and e["hash"] not in queued:
+            todo.append(e)
+            queued.add(e["hash"])
+    out["resumed_f0"] = sum(1 for e in entries if e["hash"] in have)
     if verbose:
         print("\n  F0 screen : %d genomes x %d eras, %d-symbol point-in-time universes, "
               "%d workers%s" % (len(entries), len(config.SCREEN_ERAS),
@@ -1148,6 +1178,27 @@ def main() -> int:
               "sandbox scores genomes on a market that no longer exists."
               % (cache_age, market.dates[-1].date(), bar_age,
                  config.MAX_DATA_STALENESS_DAYS))
+        if generation_in_flight(pending):
+            # The two safety rules meet here and deadlock: --refresh refuses to
+            # move data_hash under a half-evaluated generation, and this check
+            # refuses to evaluate on the cache that refusal preserved. Neither is
+            # wrong and neither can break the tie, so the runner names the only
+            # exit — a human — instead of retrying twice a day forever.
+            print("  DEADLOCK: generation %s is MID-FLIGHT, and the two safety rules "
+                  "now cancel each other — --refresh refuses to move data_hash under "
+                  "a half-evaluated generation (it skips the download), and this "
+                  "staleness check refuses to evaluate on the cache that refusal "
+                  "preserved. The scheduled job repeats this forever; it ends only "
+                  "when a human ends it, one of two ways: "
+                  "FINISH it — run without --refresh and with enough budget to "
+                  "complete generation %s on the committed cache, after which the "
+                  "next session refreshes normally; or ABANDON it — refresh the "
+                  "cache by hand and bump population.json's \"generation\" so this "
+                  "population is evaluated as a NEW generation (what IdentityDrift "
+                  "tells you to do), leaving %s and every existing ledger row "
+                  "exactly where they are. Do not delete ledger rows: n_trials() "
+                  "counts looks the search really took."
+                  % (pending, pending, os.path.relpath(tmp_dir(pending), config.ROOT)))
         title, body = alerts_arena.data_stale_summary(
             cache_age, bar_age, market.dates[-1].date(),
             config.MAX_DATA_STALENESS_DAYS, job="generation")

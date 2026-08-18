@@ -18,6 +18,14 @@ alternative (skip the charts entirely) would make the honest state of the system
 invisible, and the state this project is most likely to be in for a long while
 is "nothing has passed yet".
 
+IT ALSO REFUSES TO REPORT GATES NOBODY RAN. The champion's newest record is
+usually not an evaluation at all — run_deepeval re-simulates the incumbent every
+week for G1 and G9 and stores that four-key result — so the report falls back to
+the evidence that promoted the genome and says which generation it is from
+(_promotion_evidence, resim_note). Reporting the re-simulation as-is would print
+ten "not evaluated" gate rows and a claim that gate G4 failed, in the first
+report after every promotion.
+
 Everything user-facing carries docs/DESIGN.md's mandatory footer verbatim: the
 survivorship disclosure and "backtest alpha is a claim about the past, not a
 guarantee — not financial advice."
@@ -117,6 +125,49 @@ def _eval_for(art: dict, generation: int) -> dict:
     return max(enumerate(matching), key=lambda iv: (int(iv[1].get("filed_seq", 0)), iv[0]))[1]
 
 
+def _promotion_evidence(subject: dict) -> dict:
+    """A champion subject whose newest record is a bare RE-SIMULATION, refilled
+    with the evidence that actually promoted it. Returns `subject`, unchanged
+    unless it has to change.
+
+    run_deepeval re-simulates the incumbent every week — that is gate G1's whole
+    point — and stores the result as an evaluation record of its own carrying four
+    keys: role, identity, window and Sharpe. No battery is run on it (the gates ask
+    whether a CHALLENGER is real; nothing is asked of the champion but a
+    like-for-like Sharpe and a series to be beaten), so the record has no gate
+    report and no cohort statistic. Reported as-is it produces a page that claims
+    things that never happened: ten "not evaluated" gate rows, and — because
+    `pbo_in_cohort` is absent rather than False — the sentence "this candidate is
+    not in the cohort matrix, so PBO is unmeasured and gate G4 fails on that
+    alone", about a gate no one ran. That page is guaranteed the first Saturday
+    after any promotion.
+
+    The real evidence is on disk twice: the promotion-week eval record inside the
+    artifact, and champion.json's own copy of the gate report registry.promote was
+    handed. The first is preferred (it carries the battery as well as the verdict);
+    the pointer's copy is the fallback when that record is gone. Either way the
+    generation the gates ran in is returned as `gates_generation` and the
+    re-simulation as `resim_record`, so the report can say which week is which.
+    """
+    record = subject.get("record") or {}
+    if record.get("gate_report"):
+        return subject                       # a real evaluation: nothing to fall back to
+    meta = subject.get("champion_meta") or {}
+    gen = meta.get("generation")
+    promo = _eval_for(subject["artifact"], gen) if gen is not None else {}
+    if not promo.get("gate_report") or int(promo.get("generation", -1)) != int(gen):
+        # _eval_for falls back to "any record" when the generation has none, so a
+        # record that is not FROM the promotion generation is not evidence about
+        # this promotion and is refused here rather than mislabelled below.
+        if not meta.get("gate_report"):
+            return subject                   # nothing honest to show; claim nothing
+        promo = dict(record, gate_report=meta["gate_report"])
+    subject["record"] = promo
+    subject["resim_record"] = record
+    subject["gates_generation"] = gen
+    return subject
+
+
 def report_subject(generation: int, state_dir=None, artifact_dir=None) -> dict:
     """Who this report is about: {hash, role, artifact, record}, or None.
 
@@ -124,14 +175,19 @@ def report_subject(generation: int, state_dir=None, artifact_dir=None) -> dict:
           "refused"   the leading candidate of the last deep eval, which the
                       gates turned down. Named in full so that nothing downstream
                       can present it as a champion by accident.
+
+    A champion subject may carry two extra keys, `resim_record` and
+    `gates_generation`: see _promotion_evidence for the week in which the newest
+    record on file is a re-simulation rather than an evaluation.
     """
     import run_deepeval
     champ = registry.champion(state_dir)
     if champ is not None:
         art = registry.load_artifact(champ[0], artifact_dir)
         if art is not None:
-            return {"hash": champ[0], "role": "champion", "artifact": art,
-                    "record": _eval_for(art, generation), "champion_meta": champ[1]}
+            return _promotion_evidence(
+                {"hash": champ[0], "role": "champion", "artifact": art,
+                 "record": _eval_for(art, generation), "champion_meta": champ[1]})
 
     hist = [r for r in run_deepeval.read_history(state_dir)
             if int(r["generation"]) == int(generation)]
@@ -289,6 +345,56 @@ def _f(value, fmt="%.4f") -> str:
     return "n/a" if x != x else fmt % x
 
 
+def _first(*values):
+    """The first value that was actually MEASURED, or None.
+
+    `a or b` would fall through a 0.0, and 0.0 is a measurement: a Sharpe of
+    exactly zero is what evaluate.sharpe returns for a series too short or too
+    degenerate to have one, and reporting the F1 number in its place would quote a
+    different quantity under the same row label.
+    """
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _battery_ran(f2: dict) -> bool:
+    """Did an F2 battery produce this record, or is it a bare re-simulation?
+
+    `pbo_in_cohort` is written for every candidate the battery ran on — including
+    the ones whose PBO it could not measure, where it is False — so its PRESENCE,
+    not its truth, is what separates an evaluation from run_deepeval's four-key
+    incumbent re-simulation. See _promotion_evidence.
+    """
+    return bool(f2) and "pbo_in_cohort" in f2
+
+
+def resim_note(subject: dict) -> list:
+    """The label that stops a re-simulation week from reading as a fresh verdict.
+
+    Empty for every subject whose newest record is a real evaluation — which is
+    every report except the ones that follow a promotion.
+    """
+    if not subject.get("resim_record"):
+        return []
+    resim = subject["resim_record"] or {}
+    win = resim.get("window") or []
+    sharpe = (resim.get("f2") or {}).get("sharpe")
+    gen = subject.get("gates_generation", "?")
+    return ["> **Champion re-simulated for G1 and G9 this week; the gates were last "
+            "run in generation %s.** The weekly deep eval re-runs the incumbent on "
+            "today's data to supply a like-for-like Sharpe (G1) and a series for "
+            "challengers to beat (G9). It runs no battery and no gates against the "
+            "champion itself — the ten gates are what a CHALLENGER faces — so every "
+            "number and every gate row below is the evidence that promoted this "
+            "genome in generation %s, not a fresh verdict on it. This week's "
+            "re-simulation: %s, pre-vault net Sharpe %s."
+            % (gen, gen, " .. ".join(win) if win else "window not recorded",
+               _f(sharpe, "%+.3f")),
+            ""]
+
+
 def gate_rows(record: dict) -> list:
     """Markdown rows for the ten gates: value vs threshold, from the stored report.
 
@@ -441,6 +547,7 @@ def build_report(generation=None, state_dir=None, artifact_dir=None,
     # ── header ────────────────────────────────────────────────────────────────
     if subject["role"] == "champion":
         L += ["**Champion `%s`** — promoted through all ten gates." % subject["hash"], ""]
+        L += resim_note(subject)
     else:
         L += ["**No champion.** Nothing has passed all ten promotion gates, so this "
               "system currently recommends nothing and holds nothing.", "",
@@ -483,7 +590,8 @@ def build_report(generation=None, state_dir=None, artifact_dir=None,
     # ── headline numbers ──────────────────────────────────────────────────────
     L += ["## Headline numbers", "",
           "| statistic | value |", "|---|---|",
-          "| pre-vault net Sharpe | %s |" % _f(f2.get("sharpe") or f1.get("sharpe_prevault"), "%+.3f"),
+          "| pre-vault net Sharpe | %s |"
+          % _f(_first(f2.get("sharpe"), f1.get("sharpe_prevault")), "%+.3f"),
           "| pre-vault days scored | %s |" % (f2.get("n_days_prevault") or f1.get("n_days_prevault") or "n/a"),
           "| vault net Sharpe | %s |" % _f(f2.get("vault_sharpe"), "%+.3f"),
           "| vault days | %s |" % (f2.get("vault_days") or "n/a"),
@@ -512,11 +620,19 @@ def build_report(generation=None, state_dir=None, artifact_dir=None,
           "candidate has been shown the post-%s data at all."
           % (_f(f2.get("vault_dsr"), "%.4f"), f2.get("vault_trials", "?"),
              config.VAULT_START),
+          # THREE STATES, not two. "In the cohort" and "outside it" are both
+          # results of a battery that RAN; a record with no battery behind it at
+          # all (the champion's weekly re-simulation) has neither, and printing
+          # "G4 fails on that alone" about it would invent a failed gate.
           "- **PBO %s** (CSCV, %s) — %s"
           % (_f(f2.get("pbo"), "%.3f"), f2.get("pbo_note", "cohort unknown"),
-             "computed over this generation's returns matrix." if f2.get("pbo_in_cohort")
-             else "**this candidate is not in the cohort matrix, so PBO is unmeasured "
-                  "and gate G4 fails on that alone.**"),
+             ("computed over the returns matrix of generation %s, the cohort this "
+              "record belongs to." % record.get("generation", "?")
+              if f2.get("pbo_in_cohort")
+              else "**this candidate is not in the cohort matrix, so PBO is unmeasured "
+                   "and gate G4 fails on that alone.**") if _battery_ran(f2)
+             else "no battery was run on this record, so there is no PBO to report "
+                  "and no G4 verdict in it either way."),
           "- DSR is an OPTIMISTIC correction here: evolutionary trials are "
           "correlated, and correlated trials deflate less than independent ones "
           "would. The vault and the paper stage sit above it for exactly that reason.",

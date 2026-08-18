@@ -37,11 +37,19 @@ docs/DESIGN.md lists eleven checks; the phases fill them in. Implemented here:
                          on its own, a tie goes to the incumbent, a data_hash
                          mismatch fails G1 whatever the scores say, and no
                          incumbent skips G9 while the other nine still bind.
-                         Plus: a rejected artifact store writes nothing (so the
-                         original evaluation can still re-store as a no-op), a
-                         candidate outside the PBO cohort gets no PBO and fails
-                         G4 unmeasured, regime slices pass by absence, and the
-                         bootstrap CI is reproducible from a fixed rng.
+                         Plus: a cross-family challenger, whose scored window
+                         STARTS later because scoring begins at its own first
+                         active bar, still passes G1 (the window END and the
+                         identity triple are what must match) while a moved end
+                         or a moved data_hash still fails it; a rejected artifact
+                         store writes nothing (so the original evaluation can
+                         still re-store as a no-op); a candidate outside the PBO
+                         cohort gets no PBO and fails G4 unmeasured; regime
+                         slices pass by absence; the bootstrap CI is reproducible
+                         from a fixed rng; and the report of the week AFTER a
+                         promotion prints the promotion's own gate table, labelled
+                         with the generation it was run in, instead of ten "not
+                         evaluated" rows and a G4 failure nobody measured.
   8. Trial ledger        k evaluations write exactly k rows, an identical re-run
                          writes none, DSR falls monotonically as the trial count
                          grows, and every vault access is counted.
@@ -98,6 +106,7 @@ import genome as gn
 import ledger
 import broker_paper
 import registry
+import reports
 import run_deepeval
 import run_generation
 import run_paper
@@ -1109,6 +1118,38 @@ def test_gates():
           not resumed["all_pass"] and resumed["failed"] == ["G1"],
           resumed["gates"]["G1"]["detail"][:88])
 
+    # CROSS-FAMILY DETHRONEMENT. evaluate.full_eval starts scoring at each genome's
+    # own first active bar, so a rule family (bar WF_MIN_TRAIN_DAYS) and a model
+    # family (the bar after its first refit, weeks later and different per horizon)
+    # produce scored slices that BEGIN on different dates over the identical
+    # market. If G1 compared window starts, the first promotion would lock every
+    # other family out permanently — the gate would be enforcing family, not
+    # evidence. The end, and the identity triple that pins the data span, are what
+    # must match; G9 already intersects the two calendars before counting a window.
+    cross = dict(PASSING_CAND, window=("1999-06-14", "2019-12-31"))
+    rep_cross = gates.evaluate_gates(cross, PASSING_INC)
+    end_moved = gates.evaluate_gates(dict(PASSING_CAND, window=("1999-01-04", "2019-06-28")),
+                                     PASSING_INC)
+    cross_data = gates.evaluate_gates(
+        dict(cross, identity=("OTHERdata0000000",) + PASSING_CAND["identity"][1:]),
+        PASSING_INC)
+    check("a challenger whose scored window STARTS later still passes G1 (and promotes)",
+          rep_cross["gates"]["G1"]["pass"] and rep_cross["all_pass"]
+          and "START on different bars" in rep_cross["gates"]["G1"]["detail"],
+          rep_cross["gates"]["G1"]["detail"][:104])
+    check("...but a different window END is not like-for-like and fails G1",
+          not end_moved["gates"]["G1"]["pass"] and end_moved["failed"] == ["G1"]
+          and "window end" in end_moved["gates"]["G1"]["detail"],
+          end_moved["gates"]["G1"]["detail"][:88])
+    check("...and a different data_hash fails it whatever the starts are",
+          not cross_data["gates"]["G1"]["pass"] and cross_data["failed"] == ["G1"]
+          and "data_hash" in cross_data["gates"]["G1"]["detail"],
+          cross_data["gates"]["G1"]["detail"][:88])
+    no_inc_window = gates.evaluate_gates(PASSING_CAND, dict(PASSING_INC, window=()))
+    check("...and an incumbent with no readable window fails G1 rather than skipping it",
+          not no_inc_window["gates"]["G1"]["pass"] and no_inc_window["failed"] == ["G1"],
+          no_inc_window["gates"]["G1"]["detail"][:88])
+
     # No incumbent: G9 is skipped (nothing to beat) and G1 has nothing to compare
     # against, so it degrades to "is this candidate's own identity complete". The
     # other EIGHT must still bind exactly as they do with a champion present.
@@ -1321,6 +1362,83 @@ def test_gates():
           and not gates.evaluate_gates(dict(PASSING_CAND, boot_ci_lo=short[0]),
                                        PASSING_INC)["gates"]["G6"]["pass"],
           "%d observations -> (nan, nan)" % (config.SHARPE_MIN_OBS - 1))
+
+    # ── the report may not claim a gate verdict that was never reached ────────
+    # THE WEEK AFTER A PROMOTION, the newest record on the champion's artifact is
+    # not an evaluation: run_deepeval re-simulates the incumbent for G1 and G9 and
+    # stores that four-key result (role, identity, window, Sharpe). No battery
+    # runs on it and no gates are run against it — the ten gates are what a
+    # CHALLENGER faces. Reported as-is, that record renders ten "not evaluated"
+    # gate rows and the sentence "gate G4 fails on that alone", about gates nobody
+    # ran, on the champion's own page. So the report falls back to the evidence
+    # that promoted the genome and labels which generation it came from.
+    tmp4 = tempfile.mkdtemp(prefix="arena_report_")
+    try:
+        arts4, out4 = os.path.join(tmp4, "artifacts"), os.path.join(tmp4, "output")
+        rng = np.random.default_rng(config.SEED)
+        g = gn.random_genome(rng, tuple("feat_%02d" % i for i in range(12)))
+        entry = {"genome": g.to_dict(), "hash": g.hash(), "op": "mutate",
+                 "parent_hash": "", "birth_gen": 0}
+        dates = pd.bdate_range("2000-01-03", periods=400)
+        f1 = {"dates": dates, "daily_net": rng.normal(0.0006, 0.01, len(dates)),
+              "daily_gross": rng.normal(0.0007, 0.01, len(dates)),
+              "turnover": np.abs(rng.normal(0.1, 0.01, len(dates))),
+              "costs": np.abs(rng.normal(1.0, 0.1, len(dates))),
+              "identity": PASSING_CAND["identity"], "generation": 4,
+              "score": 0.5, "sharpe_prevault": 1.10, "n_days_prevault": len(dates),
+              "n_features": len(g.signal.features), "first_active": 0,
+              "regime_finite_frac": None, "n_fits": 0}
+        promo_report = gates.evaluate_gates(PASSING_CAND, PASSING_INC)
+        battery = dict(PASSING_CAND, hash=entry["hash"], family="momentum",
+                       pbo_in_cohort=True, pbo_note="cohort of 40 genomes, 16 splits",
+                       n_days_prevault=len(dates), vault_days=0,
+                       gate_report=promo_report)
+        registry.store_artifact(entry, f1, battery, artifact_dir=arts4)
+        registry.promote(entry["hash"], 4, promo_report, "gates passed", state_dir=tmp4)
+        # ...and the following week, the incumbent's bare re-simulation.
+        resim = {"hash": entry["hash"], "role": "incumbent (re-simulated for G1 and G9)",
+                 "identity": PASSING_CAND["identity"], "resimulated": True,
+                 "window": (str(dates[0].date()), str(dates[-1].date())),
+                 "sharpe": 1.07}
+        registry.store_artifact(entry, dict(f1, generation=5), resim, artifact_dir=arts4)
+
+        subject = reports.report_subject(5, state_dir=tmp4, artifact_dir=arts4)
+        # verify.py never reads the shared price cache (module docstring); the only
+        # line in build_report that would is the benchmark curve, which already
+        # degrades to "absent" on a cache miss. The stub IS that miss path.
+        real_curve = reports.benchmark_curve
+        reports.benchmark_curve = lambda dates: pd.Series(dtype=float)
+        try:
+            path = reports.build_report(5, state_dir=tmp4, artifact_dir=arts4,
+                                        output_dir=out4)
+        finally:
+            reports.benchmark_curve = real_curve
+        with open(path) as f:
+            text = f.read()
+        g4_row = [ln for ln in text.splitlines() if ln.startswith("| G4 ")]
+        check("a champion's re-simulation week reports the PROMOTION gates, labelled",
+              subject.get("gates_generation") == 4
+              and (subject.get("record") or {}).get("gate_report") is not None
+              and "gates were last run in generation 4" in text
+              and "not evaluated" not in text
+              and len(g4_row) == 1 and "PASS" in g4_row[0],
+              "subject falls back to the generation-%s record; G4 row: %s"
+              % (subject.get("gates_generation"), g4_row[0].strip() if g4_row else "MISSING"))
+        check("...and it does not claim gate G4 failed on a battery nobody ran",
+              "gate G4 fails on that alone" not in text
+              and "re-simulated for G1 and G9" in text
+              and "1.10" in text,          # the promotion week's numbers, not blanks
+              "the false PBO sentence is absent and the promotion evidence is quoted")
+
+        # The same fallback must NOT fire when the newest record is a real
+        # evaluation: a refused candidate's own gate report is the one to print.
+        plain = reports.report_subject(4, state_dir=tmp4, artifact_dir=arts4)
+        check("...and a week whose newest record IS an evaluation is untouched",
+              "resim_record" not in plain and "gates_generation" not in plain
+              and (plain["record"].get("gate_report") or {}).get("all_pass"),
+              "generation 4 reports its own battery, with no fallback label")
+    finally:
+        shutil.rmtree(tmp4, ignore_errors=True)
 
 
 # ── 8. trial ledger ────────────────────────────────────────────────────────────

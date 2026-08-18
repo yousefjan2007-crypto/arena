@@ -47,7 +47,7 @@ its learning loops are inert — each failure is a design requirement here:
    registry is immutable/content-hashed with full lineage + rollback.
 4. Champion promoted from a 27-symbol `--quick` run compared against
    164-symbol challengers; stale stored Sharpe → gates compare like-for-like:
-   same data hash, same window, incumbent re-simulated fresh.
+   same data hash, same window end, incumbent re-simulated fresh.
 5. DSR `n_trials=50` hardcoded; "PBO" is a 6-fold IC-sign count; real
    `CombinatorialPurgedCV` unused → arena wires DSR to an actual trial ledger
    and computes CSCV PBO.
@@ -272,7 +272,7 @@ synthetic paths (200 seeded, 2-yr horizon).
 
 | # | Gate | Threshold |
 |---|------|-----------|
-| G1 | Like-for-like | identical data_hash + cost-config hash + window; incumbent re-simulated fresh |
+| G1 | Like-for-like | identical data_hash + panel + cost-config hash + same window END; incumbent re-simulated fresh (starts differ by family: scoring begins at each genome's own first active bar, and G9 intersects the two calendars) |
 | G2 | DSR (pre-vault) | ≥ 0.95 at n_trials = full ledger, empirical trial_sr_std |
 | G3 | Vault confirmation | vault net Sharpe > 0 AND vault DSR ≥ 0.90 at N = vault_trials |
 | G4 | PBO (CSCV, S=16) | ≤ 0.20 |
@@ -291,7 +291,10 @@ repoint to any prior hash.
 
 - **Sandbox → paper:** same champion survives 3 consecutive weekly deep-evals,
   then `run_paper.py` is scheduled (Alpaca paper, whole shares, MOO orders at
-  next open — mirrors the env's fill model).
+  next open — mirrors the env's fill model). **Before `paper.yml`'s cron is
+  uncommented, verify by hand on the paper account that Alpaca accepts a
+  position-flipping OPG order** — a rejected 120-share flip against a 60-share
+  long leaves the book half-turned, and no sandbox run can discover that.
 - **Paper (≥126 trading days):** daily sim-shadow vs paper-fill ledger.
   Go-live *recommendation* requires: median |fill slippage| < 10 bps,
   corr(daily paper, sim-shadow) ≥ 0.80, cumulative paper return inside the

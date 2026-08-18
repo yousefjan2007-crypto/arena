@@ -16,7 +16,7 @@ audited separately from the arithmetic that acts on it.
 THE THRESHOLDS ARE docs/DESIGN.md's TABLE, AND THEY LIVE IN config.py. Nothing
 here holds a number.
 
-| G1  | like-for-like    | identical data/panel/config hash + window; incumbent re-simulated fresh |
+| G1  | like-for-like    | identical data/panel/config hash + same window END; incumbent re-simulated fresh |
 | G2  | DSR (pre-vault)  | >= GATE_MIN_DSR at n_trials = the full ledger  |
 | G3  | vault            | vault Sharpe > 0 AND vault DSR >= GATE_VAULT_MIN_DSR at N = vault_trials |
 | G4  | PBO (CSCV S=16)  | <= GATE_MAX_PBO                               |
@@ -96,9 +96,35 @@ def _window(d) -> tuple:
 def _g1(cand, inc) -> dict:
     """Like-for-like. Everything below is a comparison of numbers, and a
     comparison of numbers produced under different data, a different feature
-    panel, different settings or a different window is not evidence — it is the
+    panel, different settings or a different period is not evidence — it is the
     exact failure that promoted signal_lab's champion off a 27-symbol run against
-    164-symbol challengers (docs/DESIGN.md "Why shaped this way", item 4)."""
+    164-symbol challengers (docs/DESIGN.md "Why shaped this way", item 4).
+
+    THE WINDOW IS COMPARED ON ITS END, NOT ITS START, and that is not a loosening
+    of the rule — it is the difference between "same period" and "same family".
+    evaluate.full_eval starts scoring at each genome's OWN first active bar
+    (`_first_active`): a rule family trades from bar one and is handicapped to
+    WF_MIN_TRAIN_DAYS, a model family cannot be scored until its first successful
+    refit, which lands weeks apart across horizons. Two genomes simulated over the
+    identical market therefore produce scored slices that BEGIN on different dates
+    by construction. Demanding equal starts would mean that once any champion
+    exists, every challenger of another family — and every model challenger at
+    another horizon — fails G1 forever, with a note blaming the data. The gate
+    would be enforcing family, not evidence, and docs/DESIGN.md's "challengers
+    must dethrone the champion through the same gates" would be unreachable.
+
+    What must match is the market both were run on (the identity triple) and the
+    last bar both were scored to. That is not a weaker pin than it sounds: the
+    market's own SPAN lives inside data_hash — datafeed._hash_market hashes the
+    first and last calendar date along with the symbol list and each symbol's
+    last close — so a party simulated over a shorter or longer history cannot
+    slip through disguised as a start difference. The same-period discipline over
+    the days where the two slices differ is G9's, and it is already implemented
+    there: evaluate.rolling_window_wins intersects the two date indexes and scores
+    only the rolling windows both parties cover. A start difference is REPORTED
+    here rather than silently passed, so a reader can see that the two scored
+    slices are not the same length.
+    """
     c_id, c_win = _identity(cand), _window(cand)
     missing = [n for n, v in zip(("data_hash", "panel_hash", "config_hash"), c_id) if not v]
     if missing or len(c_win) != 2 or not all(c_win):
@@ -117,13 +143,24 @@ def _g1(cand, inc) -> dict:
     i_id, i_win = _identity(inc), _window(inc)
     diffs = [n for n, a, b in zip(("data_hash", "panel_hash", "config_hash"), c_id, i_id)
              if a != b]
-    if c_win != i_win:
-        diffs.append("window")
-    return _gate("G1", not diffs, c_id + c_win, i_id + i_win,
-                 "identical data, panel, settings and window" if not diffs
-                 else "differs on %s — the incumbent must be re-simulated on this "
-                      "run's inputs before the two numbers mean anything"
-                      % ", ".join(diffs))
+    if len(i_win) != 2 or not all(i_win):
+        # An incumbent with no readable window cannot be compared to, and an
+        # unreadable comparison is a failure like every other one here.
+        diffs.append("incumbent window missing")
+    elif c_win[1] != i_win[1]:
+        diffs.append("window end")
+    if diffs:
+        detail = ("differs on %s — the incumbent must be re-simulated on this "
+                  "run's inputs before the two numbers mean anything" % ", ".join(diffs))
+    elif c_win[0] == i_win[0]:
+        detail = "identical data, panel, settings and window"
+    else:
+        detail = ("identical data, panel and settings, both scored to %s; the two "
+                  "slices START on different bars (candidate %s, incumbent %s) "
+                  "because scoring begins at each genome's own first active bar, "
+                  "not at a shared date — G9 counts only the rolling windows both "
+                  "parties cover" % (c_win[1], c_win[0], i_win[0]))
+    return _gate("G1", not diffs, c_id + c_win, i_id + i_win, detail)
 
 
 def _g2(cand, cfg) -> dict:

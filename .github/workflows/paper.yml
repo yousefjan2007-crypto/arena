@@ -13,9 +13,17 @@ name: paper
 # The schedule is kept, commented, rather than deleted: weekdays 13:00 UTC =
 # 09:00 ET, well before the 09:30 open auction, because Alpaca accepts
 # market-on-open orders only until ~09:28 ET and Actions cron drifts by minutes.
+#
+# BEFORE THE CRON IS UNCOMMENTED, ONE THING MUST BE VERIFIED BY HAND on the real
+# paper account: that Alpaca ACCEPTS a position-flipping OPG order (run_paper
+# sends a long -> short flip as ONE order for the whole distance). If it rejects
+# one, a 120-share flip against a 60-share long leaves the book half-turned —
+# flat where the strategy wanted a short — and nothing in this repo can discover
+# that from a sandbox.
 on:
   # schedule:
   #   - cron: "0 13 * * 1-5"      # uncomment BY HAND at paper graduation
+  #                               # (only after the flip-order check above)
   workflow_dispatch: {}
 
 # The session appends to state/paper_ledger.csv and state/paper_shadow.csv — the

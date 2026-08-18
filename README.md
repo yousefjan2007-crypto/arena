@@ -28,7 +28,11 @@ seasonal rule, or ridge / logistic / gradient-boosting model), a portfolio
 construction (how many longs and shorts, weighting, gross exposure, vol target,
 rebalance cadence) and a risk overlay (stops, trailing stops, regime filter,
 drawdown limit). Its sha256 is its identity, and every evaluation of it — at any
-fidelity, ever — is appended to a trial ledger that nothing may rewrite.
+fidelity, ever — is appended to a trial ledger that nothing may rewrite — with one
+bounded exception: `ledger.dedup_ledger` removes byte-identical merge artifacts
+(a row a union merge appended twice, a header line it carried into the middle of
+the file), never a row that differs by so much as one character, and it prints
+what it removed and why.
 
 The **sandbox** charges honest small-account costs. You decide at the close of
 day `t`; you fill at the open of `t+1` at `open ± half-spread ± slippage`, plus
