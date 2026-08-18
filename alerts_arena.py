@@ -110,12 +110,27 @@ def channels(creds=None) -> list:
 
 
 # ── delivery ───────────────────────────────────────────────────────────────────
-def send_all(title: str, body: str, dry_run: bool = True) -> list:
+class NoChannel(RuntimeError):
+    """A real send was asked for and there was nowhere to send it.
+
+    Raised only when the caller opts in (`require_delivery=True`), because most
+    alerts would rather be silent than fail a job that otherwise succeeded. The
+    push-failure notice is the exception: it exists to make a lost session loud,
+    so a version of it that prints "delivered to: nothing" and exits 0 is the
+    failure it was written to prevent.
+    """
+
+
+def send_all(title: str, body: str, dry_run: bool = True,
+             require_delivery: bool = False) -> list:
     """Print the exact text, then deliver it unless this is a dry run.
 
     Returns the list of channels delivered to (empty on a dry run). The printing
     is not a debug aid — a dry run's whole output IS the alert, and the scheduled
     job's log is where a human checks what was said.
+
+    `require_delivery` turns "nowhere to send it" into a NoChannel exception. See
+    that class: it is for the alerts whose whole purpose is to be heard.
     """
     print("\n=== ALERT %s ===" % ("(DRY RUN — not sent)" if dry_run else "(SENDING)"))
     print(title)
@@ -125,6 +140,13 @@ def send_all(title: str, body: str, dry_run: bool = True) -> list:
 
     creds = credentials()
     used = channels(creds)
+    if not used and require_delivery:
+        raise NoChannel(
+            "no alert channel is configured, so this message reached nobody. On a "
+            "GitHub runner that means the three secrets did not reach this step — "
+            "step-level `env:` does not carry between steps, so they must be set "
+            "at JOB level. Names checked: NTFY_TOPIC, TELEGRAM_BOT_TOKEN, "
+            "TELEGRAM_CHAT_ID (values are never read into a log).")
     if "macos" in used:
         # Off macOS there is no Notification Center; osascript would fail on every
         # scheduled run and say nothing useful when it did.
@@ -350,14 +372,34 @@ if __name__ == "__main__":
     ap.add_argument("--ref", default="")
     ap.add_argument("--run-url", default="")
     ap.add_argument("--send", action="store_true", help="deliver; default is dry")
+    ap.add_argument("--channels", action="store_true",
+                    help="print which channels resolve here and exit (NAMES only — "
+                         "no credential value is ever printed)")
     _args = ap.parse_args()                                          # io-boundary
+
+    if _args.channels:
+        _c = credentials()
+        _ch = channels(_c)
+        print("channels: %s" % (", ".join(_ch) or "NONE"))
+        print("presence: ntfy_topic=%s telegram_bot_token=%s telegram_chat_id=%s"
+              % (bool(_c["ntfy_topic"]), bool(_c["telegram"].get("bot_token")),
+                 bool(_c["telegram"].get("chat_id"))))
+        raise SystemExit(0 if _ch else 1)
 
     if _args.push_failed:
         _t, _b = push_failure_summary(_args.job, _args.attempts, _args.ref, _args.run_url)
         # send_all, not send_transition: a lost session is never "the same state as
         # last time", and the state file it would consult is on the disk that is
         # about to be discarded.
-        send_all(_t, _b, dry_run=not _args.send)
+        #
+        # require_delivery with --send: this notice exists to be HEARD. Printing it
+        # to a log nobody is watching and exiting 0 would reproduce, one layer up,
+        # exactly the silent loss it is reporting.
+        try:
+            send_all(_t, _b, dry_run=not _args.send, require_delivery=_args.send)
+        except NoChannel as exc:
+            print("ALERT UNDELIVERABLE: %s" % exc)
+            raise SystemExit(2)
         raise SystemExit(0)
 
     print("arena alerts")

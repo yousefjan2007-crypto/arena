@@ -295,7 +295,8 @@ def refresh_cache(symbols, verbose=True) -> dict:
     stat = {"wanted": len(wanted), "ok": 0, "empty": 0, "error": 0,
             "unchanged": 0, "appended": 0, "restated": 0, "new": 0,
             "bars_added": 0, "rows_restated": 0, "max_rel_kept": 0.0,
-            "max_rel_restated": 0.0, "restated_symbols": []}
+            "max_rel_restated": 0.0, "restated_symbols": [],
+            "shape_changed": 0, "shape_symbols": []}
     with _force_fetch():
         for sym in wanted:
             path = datafeed._cache_path(sym)                        # noqa: SLF001
@@ -318,7 +319,15 @@ def refresh_cache(symbols, verbose=True) -> dict:
             if not os.path.exists(path):
                 continue                        # fetch succeeded but wrote nothing
             d = _tolerance_gate(path, cached, tol)
-            worst = 0.0 if d["max_rel"] == float("inf") else d["max_rel"]
+            # inf is the row-shape anomaly (a column appeared or vanished), NOT a
+            # measured drift. Coercing it to 0.0 for the arithmetic below would
+            # report the loudest event this gate can see as the quietest, so it is
+            # kept out of the maxima and counted on its own.
+            shape_change = d["max_rel"] == float("inf")
+            worst = 0.0 if shape_change else d["max_rel"]
+            if shape_change:
+                stat["shape_changed"] += 1
+                stat["shape_symbols"].append(sym)
             if d["action"] == "unchanged":
                 stat["unchanged"] += 1
                 stat["max_rel_kept"] = max(stat["max_rel_kept"], worst)
@@ -343,6 +352,12 @@ def refresh_cache(symbols, verbose=True) -> dict:
               "(tol %.0e)"
               % (stat["unchanged"], stat["appended"], stat["bars_added"], stat["new"],
                  stat["restated"], stat["max_rel_kept"], tol))
+        if stat["shape_symbols"]:
+            print("  SHAPE     : %d symbol(s) came back with a different row shape "
+                  "(a column appeared or vanished), so the drift is not a number — "
+                  "reported as shape-changed, not as 0.0 — and the fetch was "
+                  "accepted whole: %s"
+                  % (stat["shape_changed"], ", ".join(sorted(stat["shape_symbols"])[:12])))
         if stat["restated_symbols"]:
             # Loud on purpose: a restatement moves the prices this arena scores
             # genomes on. It should never be a silent line.

@@ -37,6 +37,13 @@ jobs:
       # they, are environment-tunable.
       ARENA_N_JOBS: "4"
       GEN_TIME_BUDGET_MIN: "300"
+      # JOB level, not step level. GitHub Actions does NOT carry a step's `env:`
+      # into later steps, and the commit-back step below has to be able to ALERT
+      # when it gives up: a lost session is the worst outcome this loop has, and
+      # it was silently unable to say so while these three lived on the run step.
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,10 +63,6 @@ jobs:
         run: python verify.py
 
       - name: Run one generation
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         # --refresh is the ONE network step, and it skips itself when the
         # generation is already mid-flight (new bars under half-evaluated work
         # would orphan every checkpoint — run_generation.generation_in_flight).
@@ -87,6 +90,13 @@ jobs:
               print("%d matrices, newest gen %d, keeping the last %d -> pruned %d"
                     % (len(paths), max(gens), keep, len(dropped)))
           PY
+
+      # TEMPORARY (removed in the next commit): proves the job-level secrets reach
+      # a step AFTER the run step, which is the whole point of hoisting them —
+      # the commit-back step below has to be able to alert when it gives up.
+      # Prints channel NAMES only; no credential value is ever read into a log.
+      - name: PROBE — which alert channels resolve this late in the job
+        run: python alerts_arena.py --channels
 
       - name: Commit state back
         run: |

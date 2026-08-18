@@ -140,8 +140,16 @@ def dedup_ledger(state_dir=None, verbose=True) -> int:
         lines = f.read().splitlines()
     if len(lines) < 2:
         return 0
-    header, seen, kept = lines[0], set(), []
+    header, seen, kept, headers = lines[0], set(), [], 0
     for line in lines[1:]:
+        if line == header:
+            # A HEADER LINE MID-FILE. Union merge can carry one down when both
+            # sides created the file, and pandas would then read the column names
+            # as a data row: `generation` parsed as an int, every numeric column
+            # silently becoming object dtype, and n_trials() counting a row that
+            # is not a trial. Cheaper to drop here than to debug later.
+            headers += 1
+            continue
         if line in seen:
             continue
         seen.add(line)
@@ -155,10 +163,13 @@ def dedup_ledger(state_dir=None, verbose=True) -> int:
     os.replace(tmp, path)
     forget_cache()
     if verbose:
-        print("  ledger    : removed %d exact duplicate row(s) left by a union merge "
-              "(%d rows remain). Only byte-identical rows were dropped; record_trial "
-              "is idempotent on (genome, generation, fidelity), so a duplicate cannot "
-              "be a second real evaluation." % (removed, len(kept)))
+        print("  ledger    : removed %d row(s) left by a union merge — %d exact "
+              "duplicate%s (%d rows remain). Only byte-identical rows were dropped; "
+              "record_trial is idempotent on (genome, generation, fidelity), so a "
+              "duplicate cannot be a second real evaluation."
+              % (removed, removed - headers,
+                 " and %d repeated header line(s), which pandas would otherwise "
+                 "have read as data" % headers if headers else "", len(kept)))
     return removed
 
 

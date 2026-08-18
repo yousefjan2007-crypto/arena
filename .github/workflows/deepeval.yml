@@ -25,6 +25,13 @@ jobs:
     env:
       ARENA_N_JOBS: "4"
       DEEPEVAL_TIME_BUDGET_MIN: "300"
+      # JOB level, not step level. GitHub Actions does NOT carry a step's `env:`
+      # into later steps, and the commit-back step below has to be able to ALERT
+      # when it gives up: a lost session is the worst outcome this loop has, and
+      # it was silently unable to say so while these three lived on the run step.
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,10 +48,6 @@ jobs:
         run: python verify.py
 
       - name: Deep eval, gates, decision, report
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         # No --refresh here: the deep eval decides, it does not search, and a
         # promotion decided on bars that arrived between the generation and the
         # gates would not be like-for-like with the candidates' own evaluation.
