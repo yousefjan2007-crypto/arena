@@ -638,7 +638,8 @@ def main() -> int:
               "account to read fills from. Reconciliation resumes when credentials "
               "are present." % len(prior))
     else:
-        anchor = max(r["date"] for r in prior if r.get("date"))
+        anchor = max([r["date"] for r in prior if r.get("date")]
+                     or [str(session_date.date())])
         fills = broker.fills_since(anchor)                              # io-boundary
         appended = append_ledger([{"date": f["date"], "symbol": f["symbol"],
                                    "side": f["side"], "qty": f["qty"],
@@ -698,9 +699,22 @@ def main() -> int:
             acct = broker.account()                                     # io-boundary
             basis_equity, basis = acct["equity"], "the paper account's equity"
         book = np.zeros(len(market.symbols))
+        untracked = {}
         for sym, qty in current.items():
             if sym in market.symbols:
                 book[market.symbols.index(sym)] = float(qty)
+            elif qty:
+                untracked[sym] = qty
+        if untracked:
+            # A position in a name today's universe does not contain cannot be
+            # sized, trimmed or closed by anything below, so it would sit there
+            # unmanaged and invisible. Say it out loud every session: the universe
+            # is rebuilt each run and membership does change.
+            print("  UNMANAGED : %s — held in the paper account but not in this "
+                  "run's %d-symbol universe. No order below can touch them; close "
+                  "them by hand or restore the symbol."
+                  % (", ".join("%s x%s" % kv for kv in sorted(untracked.items())),
+                     len(market.symbols)))
 
         env = MarketEnv(market, CostModel())
         tgt, w, lev_scale, rejected = share_targets(env, decision["target_w"],
@@ -718,9 +732,12 @@ def main() -> int:
                  "" if broker.credentialed else
                  "; the broker's empty book means UNKNOWN, so these orders are "
                  "stated against a FLAT account"))
-        print("  orders    : %d intended (%d dropped: %s)"
-              % (len(orders), len(plan["dropped"]),
-                 ", ".join("%s %s" % (s, why) for s, why in plan["dropped"][:6]) or "none"))
+        # Both refusal lists: the env's weight-level ones (a name over its cap, a
+        # book over MAX_POSITIONS) and the order-level ones (dust, no price).
+        refused = rejected + plan["dropped"]
+        print("  orders    : %d intended (%d name(s) refused: %s)"
+              % (len(orders), len(refused),
+                 ", ".join("%s %s" % (s, why) for s, why in refused[:6]) or "none"))
         for o in orders[:20]:
             print("      %-6s %-6s %5d sh  @ ~$%8.2f  %s -> %s  [%s]"
                   % (o["side"], o["symbol"], o["qty"],
@@ -730,10 +747,20 @@ def main() -> int:
             print("      ... and %d more" % (len(orders) - 20))
 
         # ── 4. submit, or say why not ─────────────────────────────────────────
+        # An armed --submit against an unarmed BROKER is not a rejection to log
+        # nine times over: there is no account to reject anything. It is the same
+        # "nothing was submitted" as a dry run, said differently, so the loop
+        # below is not entered and the rows stay INTENDED.
+        can_submit = arm["armed"] and submit_wanted and broker.credentialed
+        if arm["armed"] and submit_wanted and not broker.credentialed:
+            print("  --submit was asked for and the gate is closed, but this machine "
+                  "has no Alpaca paper credentials (%s / %s, or config.local.json). "
+                  "Nothing was sent; the rows below are intended."
+                  % (broker_paper.ENV_KEY, broker_paper.ENV_SECRET))
         rows, rejected_orders = [], 0
         for o in orders:
             status, order_id = "intended", ""
-            if arm["armed"] and submit_wanted:
+            if can_submit:
                 try:
                     res = broker.place(o["symbol"], o["side"], o["qty"])  # io-boundary
                 except Exception as exc:                # a broker refusal is a FACT
