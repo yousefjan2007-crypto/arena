@@ -1745,18 +1745,45 @@ class FakeBroker:
 
     mode = "paper"
 
-    def __init__(self, book=None, credentialed=True):
+    def __init__(self, book=None, credentialed=True, is_open=False, status="accepted"):
         self.book = dict(book or {})
         self.credentialed = credentialed
+        self.is_open = is_open
+        self.status = status
         self.placed = []
 
     def positions(self):
         return dict(self.book) if self.credentialed else {}
 
-    def place(self, symbol, side, qty):
-        self.placed.append((symbol, side, qty))
+    def clock(self):
+        return None if not self.credentialed else {"is_open": self.is_open}
+
+    def place(self, symbol, side, qty, client_order_id=None):
+        self.placed.append((symbol, side, qty, client_order_id))
         return {"executed": True, "order_id": "fake-%d" % len(self.placed),
-                "status": "accepted"}
+                "status": self.status, "client_order_id": client_order_id,
+                "live": self.status not in broker_paper.DEAD_STATUSES}
+
+
+def evidence_rows(sim_series):
+    """A synthetic paper history that tracks its shadow, as evidence_table sees it.
+
+    The go-live alert can only be trusted if it can FIRE, and it can only be shown
+    to fire against a history that passes all five criteria. Built here rather
+    than waiting 126 real sessions: paper returns are the sim's with a small
+    execution wobble, slippage is inside the bound, tracking never trips.
+    """
+    rng = np.random.default_rng(config.SEED + 1)
+    wobble = rng.normal(0.0, 0.00005, len(sim_series))       # ~0.5 bp/day of drift
+    rows = []
+    for i, s in enumerate(sim_series):
+        p = float(s + wobble[i])
+        rows.append({"date": "d%03d" % i, "sim_net": repr(float(s)),
+                     "paper_net": repr(p),
+                     "tracking_error_bps": repr((p - float(s)) * 1e4),
+                     "fill_slippage_bps": repr(float(rng.normal(0.0, 2.0))),
+                     "n_fills": 1})
+    return run_paper.evidence_table(rows)
 
 
 def test_paper_stage():
@@ -1872,7 +1899,8 @@ def test_paper_stage():
     tmp = tempfile.mkdtemp(prefix="arena_verify_paper_")
     try:
         rows = [{"date": "2026-08-17", "symbol": o["symbol"], "side": o["side"],
-                 "qty": o["qty"], "fill_px": "", "order_id": "", "status": "intended",
+                 "qty": o["qty"], "fill_px": "", "order_id": "",
+                 "client_order_id": "", "status": "intended", "broker_status": "",
                  "genome_hash": X, "reason": o["reason"]} for o in plan["orders"]]
         first = run_paper.append_ledger(rows, state_dir=tmp)
         second = run_paper.append_ledger(rows, state_dir=tmp)
@@ -1884,7 +1912,8 @@ def test_paper_stage():
               % (first["written"], second["written"], second["skipped"]))
 
         fill = {"date": "2026-08-18", "symbol": "FLT1", "side": "buy", "qty": 60,
-                "fill_px": 50.02, "order_id": "abc-123", "status": "filled",
+                "fill_px": 50.02, "order_id": "abc-123", "client_order_id": "",
+                "status": "filled", "broker_status": "filled",
                 "genome_hash": X, "reason": "fill"}
         run_paper.append_ledger([fill], state_dir=tmp)
         again = run_paper.append_ledger([dict(fill, status="filled")], state_dir=tmp)
@@ -1892,6 +1921,50 @@ def test_paper_stage():
               "reconciliation window double-counts nothing",
               again["written"] == 0 and again["skipped"] == 1,
               "the same closed order read twice writes one row")
+
+        # THE SUBMITTED -> FILL SEQUENCE. A submitted row already carries the
+        # broker's order id, so an order-id key scoped to the whole file would
+        # recognise the next morning's FILL of that order as "already recorded"
+        # and drop it — leaving no fill price, no fill date and no terminal status
+        # for exactly the orders this system places, with the reconcile line
+        # reporting the loss as correct dedup. The key is scoped to fill rows.
+        sub = {"date": "2026-08-19", "symbol": "FLT5", "side": "buy", "qty": 20,
+               "fill_px": "", "order_id": "ord-777",
+               "client_order_id": "arena-2026-08-19-FLT5-buy-20",
+               "status": "submitted", "broker_status": "accepted",
+               "genome_hash": X, "reason": "rebalance"}
+        run_paper.append_ledger([sub], state_dir=tmp)
+        its_fill = {"date": "2026-08-20", "symbol": "FLT5", "side": "buy", "qty": 20,
+                    "fill_px": 50.11, "order_id": "ord-777", "client_order_id": "",
+                    "status": "filled", "broker_status": "filled",
+                    "genome_hash": X, "reason": "fill"}
+        landed = run_paper.append_ledger([its_fill], state_dir=tmp)
+        twice = run_paper.append_ledger([its_fill], state_dir=tmp)
+        back = [r for r in run_paper.read_ledger(tmp) if r["order_id"] == "ord-777"]
+        check("the realized fill of a SUBMITTED order is recorded, not eaten by its "
+              "own order id",
+              landed["written"] == 1 and twice["written"] == 0 and len(back) == 2
+              and {r["status"] for r in back} == {"submitted", "filled"}
+              and [r["fill_px"] for r in back if r["status"] == "filled"] == ["50.11"],
+              "order ord-777 has both rows: submitted 2026-08-19 (no price) and "
+              "filled 2026-08-20 @ 50.11; a second read of the fill writes nothing")
+
+        # The double-entry guard, local half.
+        already = run_paper.submitted_today(run_paper.read_ledger(tmp), "2026-08-19")
+        check("a symbol already submitted for this session is recognised",
+              set(already) == {"FLT5"} and already["FLT5"]["qty"] == "20"
+              and run_paper.submitted_today(run_paper.read_ledger(tmp), "2026-08-21") == {},
+              "an OPG order rests until the auction, so positions() is unchanged "
+              "and the recomputed order would DOUBLE the position")
+        check("...and the broker-enforced half is deterministic in the decision",
+              run_paper.client_order_id("2026-08-19", "FLT5", "buy", 20)
+              == "arena-2026-08-19-FLT5-buy-20"
+              and run_paper.client_order_id("2026-08-19", "FLT5", "buy", 20)
+              == run_paper.client_order_id("2026-08-19", "FLT5", "BUY", 20.0)
+              and run_paper.client_order_id("2026-08-19", "FLT5", "buy", 21)
+              != run_paper.client_order_id("2026-08-19", "FLT5", "buy", 20),
+              "Alpaca rejects a duplicate client_order_id, so this survives a lost "
+              "ledger and a second machine; a different size is a different order")
 
         changed = [dict(rows[0], qty=int(rows[0]["qty"]) + 5)]
         check("a decision that genuinely CHANGED within a session is appended, not "
@@ -1923,6 +1996,38 @@ def test_paper_stage():
                        "misreport every order ever placed")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # The shadow may only be measured once the session it measures has ENDED.
+    for name, clock, expect in [("the market is open", {"is_open": True}, False),
+                                ("the market is closed", {"is_open": False}, True),
+                                ("the clock could not be read", None, False)]:
+        session_ok, why = run_paper.shadow_session_ok(clock)
+        check("shadow row when %s -> %s" % (name, "written" if expect else "SKIPPED"),
+              session_ok == expect, (why or "pre-open: a full session to compare")[:88])
+    check("an unarmed broker has no exchange clock either",
+          FakeBroker({}, credentialed=False).clock() is None
+          and not run_paper.shadow_session_ok(FakeBroker({}, credentialed=False).clock())[0],
+          "no account, no clock, no row — rather than a row measuring a partial day")
+
+    # The go-live band: DESIGN's fourth criterion, computed rather than stubbed.
+    rng = np.random.default_rng(config.SEED)
+    sim_series = rng.normal(0.0004, 0.008, 300)
+    inside = run_paper.cumulative_band(sim_series,
+                                       float(np.prod(1.0 + sim_series) - 1.0))
+    outside = run_paper.cumulative_band(sim_series, -0.95)
+    short_series = run_paper.cumulative_band(sim_series[:10], 0.01)
+    check("the cumulative paper return is tested against the shadow's bootstrap band",
+          inside["inside"] is True and outside["inside"] is False
+          and short_series["inside"] is None,
+          "band [%+.3f, %+.3f] over %d block resamples: the shadow's own cumulative "
+          "is inside, -95%% is outside, and too few days answers None (not False)"
+          % (inside["lo"], inside["hi"], config.BOOT_ITERS))
+    table = evidence_rows(sim_series)
+    check("...so the go-live path is reachable rather than dead code",
+          table["all_pass"] is True and len(table["rows"]) == 5
+          and all(r[3] for r in table["rows"]),
+          "a synthetic 300-session paper history that tracks its shadow passes all "
+          "five criteria — the alert can fire, which is the only way it can be tested")
 
     # Breach spells: the anti-spam key moves only when a NEW divergence starts.
     limit = config.PAPER_MAX_TE_BPS

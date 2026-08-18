@@ -370,6 +370,9 @@ EXECUTION_MODE = "sandbox"
 # nothing. The other four are the go-live EVIDENCE thresholds DESIGN names — they
 # decide what a paper session reports, never what it does, because "the system
 # never self-starts live": a human reads the table and flips EXECUTION_MODE.
+# The count INCLUDES the deep eval that promoted it (that entry names it
+# champion_hash_after too), so arming happens two deep evals after promotion;
+# run_paper.arming_status says why, and what the stricter reading would cost.
 PAPER_ARM_CONSECUTIVE = 3           # consecutive complete deep evals the champion must survive
 PAPER_MIN_DAYS = 126                # trading days of paper before go-live is even discussable
 PAPER_MAX_TE_BPS = 25.0             # daily |paper - sim| that trips the tracking alert

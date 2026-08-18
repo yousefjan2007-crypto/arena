@@ -14,11 +14,15 @@ INTERFACE — the shape signal_lab/broker.py established, in shares rather than
 notional, because the sandbox decides in whole shares and the paper account has
 to mirror the sandbox:
 
-    place(symbol, side, qty) -> dict      market-on-open, whole shares
+    place(symbol, side, qty, client_order_id=None) -> dict
+                                          market-on-open, whole shares; the
+                                          client_order_id is the broker-enforced
+                                          double-entry guard
     close(symbol)            -> dict
     position(symbol)         -> dict | None
     positions()              -> {symbol: signed int shares}
     account()                -> dict | None
+    clock()                  -> dict | None   the EXCHANGE clock, not this box's
     fills_since(iso_date)    -> [dict]    closed orders, for reconciliation
 
 ORDERS ARE MARKET-ON-OPEN (TimeInForce.OPG), and that is not a preference: the
@@ -49,6 +53,12 @@ import config                       # FIRST: puts the siblings on sys.path
 
 MODE = "paper"
 UNARMED_REASON = "no_credentials"
+
+# Terminal statuses that mean the order is NOT working. submit_order does not
+# raise for all of these — an order can come back already rejected — so "no
+# exception" is not the same as "an order exists", and place() reports which.
+DEAD_STATUSES = frozenset({"rejected", "canceled", "expired", "suspended",
+                           "stopped", "done_for_day", "replaced"})
 
 # The environment path (GitHub Actions repo secrets -> workflow env) and the local
 # path (arena/config.local.json, gitignored). Never a literal in source.
@@ -128,12 +138,22 @@ class AlpacaPaperBroker:
         return out
 
     # ── writes ─────────────────────────────────────────────────────────────────
-    def place(self, symbol: str, side: str, qty: int) -> dict:
+    def place(self, symbol: str, side: str, qty: int, client_order_id: str = None) -> dict:
         """One market-on-open order for `qty` WHOLE shares. `side` is buy | sell.
 
         Raises on a non-integral or non-positive quantity rather than rounding:
         the sandbox already decided the share count, and an adapter that quietly
         changed it would break the one thing the paper stage measures.
+
+        `client_order_id` IS THE DOUBLE-ENTRY GUARD, and it is the only one that
+        works across machines. An OPG order does not fill until the next opening
+        auction, so between two runs of the same session the account still reads
+        flat and the caller would compute — and send — the identical order a
+        second time. Alpaca rejects a duplicate client_order_id outright, so
+        deriving it from (session date, symbol, side, qty) makes the submission
+        idempotent AT THE BROKER, where a local check cannot reach. run_paper
+        also checks its own ledger; this is the layer that survives a lost ledger,
+        a second machine, or a re-run against a runner that never pushed.
         """
         side = str(side).lower()
         if side not in ("buy", "sell"):
@@ -142,7 +162,8 @@ class AlpacaPaperBroker:
             raise ValueError("qty must be a positive whole number of shares, got %r" % qty)
         qty = int(qty)
         if not self.credentialed:
-            return self._refused("place", symbol=symbol, side=side, qty=qty)
+            return self._refused("place", symbol=symbol, side=side, qty=qty,
+                                 client_order_id=client_order_id)
 
         from alpaca.trading.enums import OrderSide, TimeInForce
         from alpaca.trading.requests import MarketOrderRequest
@@ -150,11 +171,19 @@ class AlpacaPaperBroker:
         # time-in-force. Both halves are the env's fill model, stated to the broker.
         req = MarketOrderRequest(symbol=symbol, qty=qty,
                                  side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-                                 time_in_force=TimeInForce.OPG)
+                                 time_in_force=TimeInForce.OPG,
+                                 client_order_id=client_order_id)
         order = self.client.submit_order(req)
+        # order.status is REPORTED, never assumed: submit_order can return an order
+        # that is already rejected, and a caller that recorded "submitted" off the
+        # absence of an exception would have a ledger row for a position it does
+        # not hold. See DEAD_STATUSES.
+        status = _enum_value(order.status)
         return {"broker": "alpaca_paper", "mode": self.mode, "action": "place",
                 "symbol": symbol, "side": side, "qty": qty, "executed": True,
-                "order_id": str(order.id), "status": _enum_value(order.status)}
+                "order_id": str(order.id), "status": status,
+                "client_order_id": str(order.client_order_id or client_order_id or ""),
+                "live": status not in DEAD_STATUSES}
 
     def close(self, symbol: str) -> dict:
         """Flatten one symbol. Alpaca closes at market, so this is an exit only —
@@ -182,6 +211,23 @@ class AlpacaPaperBroker:
         return {"equity": float(a.equity), "last_equity": float(a.last_equity),
                 "cash": float(a.cash), "buying_power": float(a.buying_power),
                 "status": _enum_value(a.status)}
+
+    def clock(self):
+        """The EXCHANGE clock: {"is_open", "timestamp", "next_open", "next_close"}.
+
+        Not this machine's clock and not a compute input — it answers one
+        question, "is the session I am about to measure actually over", and the
+        only correct source for it is the venue. run_paper's shadow row compares
+        the account's `equity/last_equity` against a full simulated trading day,
+        and that comparison is only true PRE-OPEN. Mid-session the account holds a
+        partial day and the row would be a permanent, wrong record. So the clock
+        is read, and a session that is open is skipped rather than mismeasured.
+        """
+        if not self.credentialed:
+            return None
+        c = self.client.get_clock()                                 # io-boundary
+        return {"is_open": bool(c.is_open), "timestamp": c.timestamp,
+                "next_open": c.next_open, "next_close": c.next_close}
 
     def positions(self) -> dict:
         """{symbol: signed whole shares}. EMPTY MEANS UNKNOWN when unarmed."""
@@ -269,21 +315,25 @@ if __name__ == "__main__":
         print("  UNARMED — every write refuses, every read answers empty:")
         print("    place  : %s" % b.place("SPY", "buy", 3))
         print("    close  : %s" % b.close("SPY"))
-        print("    account: %s   positions: %s   fills_since: %s"
-              % (b.account(), b.positions(), b.fills_since("2026-01-02")))
+        print("    account: %s   positions: %s   clock: %s   fills_since: %s"
+              % (b.account(), b.positions(), b.clock(), b.fills_since("2026-01-02")))
         print("    An empty book here means UNKNOWN, not flat: run_paper.py checks "
               ".credentialed before it diffs anything against it.")
         # The refusal contract, asserted rather than described.
         for result in (b.place("SPY", "buy", 3), b.close("SPY")):
             assert result["executed"] is False and result["reason"] == UNARMED_REASON
-        assert b.positions() == {} and b.account() is None and b.fills_since("2026-01-02") == []
+        assert b.positions() == {} and b.account() is None and b.clock() is None \
+            and b.fills_since("2026-01-02") == []
         print("  smoke      : PASS (unarmed contract holds; alpaca-py never imported)")
     else:
         acct = b.account()                                          # io-boundary
+        clk = b.clock()                                             # io-boundary
         print("  ARMED — account read (no order placed):")
         print("    equity $%.2f | last_equity $%.2f | cash $%.2f | buying power $%.2f"
               % (acct["equity"], acct["last_equity"], acct["cash"], acct["buying_power"]))
         print("    status %s | %d open position(s)" % (acct["status"], len(b.positions())))
+        print("    exchange clock: %s (next open %s)"
+              % ("OPEN" if clk["is_open"] else "closed", clk["next_open"]))
         print("  smoke      : PASS (account reachable; nothing was submitted)")
 
     # Whole shares are a contract, not a convenience.

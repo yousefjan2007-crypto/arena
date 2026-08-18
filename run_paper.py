@@ -85,12 +85,21 @@ SHADOW_FILE = "paper_shadow.csv"
 # decision was taken on; the order fills at the NEXT open) and the FILL date for a
 # reconciled row. The two are one bar apart on purpose — that is the env's clock,
 # and collapsing them would hide the only thing this ledger is for.
-# `status`: intended | submitted | rejected | <Alpaca's terminal status, e.g.
-# filled, canceled, expired>. A row is never rewritten; a decision that changed
-# within one session appends a second row and the LAST row for a (date, symbol)
-# wins.
-LEDGER_COLUMNS = ("date", "symbol", "side", "qty", "fill_px", "order_id", "status",
-                  "genome_hash", "reason")
+# `status` is ARENA'S lifecycle value — intended | submitted | rejected | the
+# order's terminal status on a reconciled row (filled, canceled, expired) — and
+# `broker_status` is Alpaca's own word for the same row, unedited. Two columns
+# because they answer different questions: what this system believes it did, and
+# what the venue said. A row is never rewritten; a decision that changed within
+# one session appends a second row and the LAST row for a (date, symbol) wins.
+#
+# `reason` doubles as the row's KIND: "fill" marks a row that came back from the
+# broker, everything else is a row this system wrote when it decided. append_ledger
+# keys the two differently and that distinction is load-bearing — see it there.
+LEDGER_COLUMNS = ("date", "symbol", "side", "qty", "fill_px", "order_id",
+                  "client_order_id", "status", "broker_status", "genome_hash",
+                  "reason")
+
+FILL_REASON = "fill"
 
 # One row per session that had a paper account to compare against. sim_net is the
 # shadow episode's net return for that bar; paper_net is the account's own
@@ -157,6 +166,15 @@ def arming_status(rows, champion_hash, n_required: int = None) -> dict:
     bug — and because the four checks are the operational reading of DESIGN's one
     sentence about graduation, so they should be legible to someone holding only
     that sentence.
+
+    THE PROMOTION ENTRY COUNTS AS ONE OF THE THREE, deliberately. A champion
+    promoted at generation N is named `champion_hash_after` by the entry that
+    promoted it and by every entry after, so three consecutive entries means the
+    promotion plus two deep evals it survived, and arming happens at generation
+    N+2. The stricter reading — three survivals AFTER the promotion — would
+    require four entries and is one character away (`entries[-(n + 1):-1]`); it
+    was not taken because DESIGN's sentence counts deep evals the champion came
+    through, and the run that promoted it is one of those.
     """
     n = int(config.PAPER_ARM_CONSECUTIVE if n_required is None else n_required)
     entries = complete_entries(rows)
@@ -246,38 +264,79 @@ def _row_key(row) -> tuple:
     return tuple(str(row.get(c, "")) for c in LEDGER_COLUMNS)
 
 
+def _is_fill(row) -> bool:
+    return str(row.get("reason", "")) == FILL_REASON
+
+
 def append_ledger(rows, state_dir=None) -> dict:
     """Append order rows idempotently. Returns {"written", "skipped"}.
 
-    TWO KEYS, because the two kinds of row mean different things.
+    TWO KEYS, AND THE SCOPE OF THE FIRST ONE IS THE WHOLE POINT.
 
-      a FILL row is identified by its `order_id`: the broker's own identifier for
-      an event that happened once. Re-reading the same closed order on a later
-      session must not double-count it, and the reconciliation window deliberately
-      overlaps (it is anchored on a DATE) so that nothing is missed.
+      a FILL row — one this system read back from the broker — is identified by
+      its `order_id`, the venue's identifier for an event that happened once.
+      The reconciliation window deliberately overlaps (it is anchored on a DATE),
+      so the same closed order is offered repeatedly and must be written once.
 
-      an INTENDED/SUBMITTED row has no order id, so it is identified by its whole
-      content. Re-running a session on the same data recomputes the same decision
-      and writes nothing — the idempotency this file's whole re-runnability rests
-      on. A decision that genuinely CHANGED within one session (the cache
-      refreshed between two runs) differs in some field and is appended as the
-      second decision it is; the last row for a (date, symbol) is the live one.
+      a SUBMITTED / INTENDED / REJECTED row is identified by its whole content.
+      Re-running a session on the same data recomputes the same decision and
+      writes nothing; a decision that genuinely CHANGED within one session
+      differs in some field and is appended as the second decision it is.
+
+    THE ORDER-ID KEY IS SCOPED TO FILL ROWS, and getting that wrong destroys
+    exactly the data this ledger exists for. A submitted row already carries the
+    broker's order id — that is how the submission is traceable — so a global
+    id-set would recognise the NEXT MORNING'S FILL of that same order as
+    "already recorded" and drop it. The ledger would then hold no fill price, no
+    fill date and no terminal status for precisely the orders this system placed,
+    while the reconcile line reported the loss as correct deduplication. So the
+    two kinds are matched against their own kind, and nothing else.
     """
     existing = read_ledger(state_dir)
-    seen_ids = {r.get("order_id") for r in existing if r.get("order_id")}
+    seen_fills = {str(r.get("order_id")) for r in existing
+                  if _is_fill(r) and r.get("order_id")}
     seen_rows = {_row_key(r) for r in existing}
     fresh, skipped = [], 0
     for row in rows:
         oid = str(row.get("order_id", "") or "")
         key = _row_key(row)
-        if (oid and oid in seen_ids) or (not oid and key in seen_rows):
+        if (_is_fill(row) and oid and oid in seen_fills) or \
+                (not _is_fill(row) and key in seen_rows):
             skipped += 1
             continue
         fresh.append(row)
-        seen_ids.add(oid) if oid else None
+        if _is_fill(row) and oid:
+            seen_fills.add(oid)
         seen_rows.add(key)
     return {"written": _append(ledger_path(state_dir), LEDGER_COLUMNS, fresh),
             "skipped": skipped}
+
+
+def submitted_today(rows, session_date: str) -> dict:
+    """{symbol: row} for orders this system already SENT for this session.
+
+    The local half of the double-entry guard. An OPG order rests until the next
+    opening auction, so between two runs of one session the account still reads
+    flat and the delta computation — being correct — produces the identical order
+    again. Nothing downstream would notice: positions() is unchanged, the sizing
+    is unchanged, and the second submission doubles the position.
+    """
+    out = {}
+    for row in rows:
+        if str(row.get("status")) == "submitted" and str(row.get("date")) == str(session_date):
+            out[row.get("symbol")] = row
+    return out
+
+
+def client_order_id(session_date: str, symbol: str, side: str, qty) -> str:
+    """The broker-enforced half of the same guard: deterministic in the decision.
+
+    Alpaca rejects a duplicate client_order_id, so two runs that compute the same
+    order for the same session cannot both reach the book — including runs on
+    different machines, or after a runner failed to push its ledger. A genuinely
+    different order (different size) gets a different id and is allowed through.
+    """
+    return "arena-%s-%s-%s-%d" % (session_date, symbol, str(side).lower(), int(qty))
 
 
 def append_shadow(row, state_dir=None) -> bool:
@@ -453,6 +512,45 @@ def _float(value, default=float("nan")) -> float:
     return out
 
 
+def _safe_clock(broker):
+    """The exchange clock, or None if it could not be read. A network failure
+    here must not kill a session that has already placed its orders."""
+    try:
+        return broker.clock()                                       # io-boundary
+    except Exception as exc:
+        print("  clock     : could not read the exchange clock (%s: %s)"
+              % (type(exc).__name__, str(exc)[:120]))
+        return None
+
+
+def shadow_session_ok(clock) -> tuple:
+    """(may a shadow row be written now, why not) — decided by the EXCHANGE clock.
+
+    `paper_net` is the account's `equity / last_equity - 1`, which is the return
+    of the session that has ENDED. Read pre-open that is a full trading day and
+    lines up bar-for-bar with the simulator's `daily_net`. Read while the market
+    is open it is a PARTIAL day measured against a full one, and the tracking
+    error that comes out of it is not a measurement of anything: it would raise
+    false breach alerts and, because a shadow row is written once per date and
+    never rewritten, it would sit in the go-live evidence permanently, blocking
+    the correct row for that date forever.
+
+    So an open market is not "measure it anyway", it is "do not measure". A clock
+    that could not be read is treated the same way: the failure mode of skipping
+    is one missing row, and the failure mode of guessing is a false record.
+    """
+    if clock is None:
+        return False, ("the exchange clock could not be read, and a shadow row "
+                       "written without knowing whether the session is over is a "
+                       "permanent record of a partial day")
+    if clock.get("is_open"):
+        return False, ("the market is OPEN: equity/last_equity is a partial "
+                       "session against the simulator's full one, and that "
+                       "comparison would be wrong in a file that is written once "
+                       "per date. The 13:00 UTC / 09:00 ET cron exists for this")
+    return True, ""
+
+
 def breach_spell_start(shadow_rows, limit: float):
     """The date the CURRENT unbroken run of tracking-error breaches began, or None.
 
@@ -471,16 +569,61 @@ def breach_spell_start(shadow_rows, limit: float):
     return start
 
 
+def cumulative_band(sim, paper_cum: float, level: float = 0.90) -> dict:
+    """Is the realised cumulative paper return inside the shadow's bootstrap band?
+
+    DESIGN's fourth go-live criterion. The sim-shadow's daily returns are
+    resampled in blocks of config.BOOT_BLOCK (a month, so autocorrelation and
+    the strategy's own holding period survive the resample), each resample is
+    compounded to a cumulative return, and the paper account's actual cumulative
+    has to land between the (1-level)/2 and (1+level)/2 quantiles of that
+    distribution. Inside the band means the paper path is an ordinary draw from
+    what the strategy does; outside it means the account did something the
+    simulator does not do, in either direction.
+
+    Seeded from config.SEED via default_rng, like everything else in this
+    project, so the answer is reproducible from the shadow file alone. Returns
+    `inside=None` when there are fewer than two blocks to resample — not False:
+    "not enough data to ask" is not "asked and failed", and the caller prints
+    the difference.
+    """
+    r = np.asarray([v for v in sim if np.isfinite(v)], dtype=np.float64)
+    block = int(config.BOOT_BLOCK)
+    out = {"inside": None, "lo": float("nan"), "hi": float("nan"),
+           "paper_cum": paper_cum, "n": int(r.size), "block": block}
+    if r.size < 2 * block or not np.isfinite(paper_cum):
+        out["note"] = ("needs at least %d daily observations (2 x BOOT_BLOCK); "
+                       "have %d" % (2 * block, r.size))
+        return out
+    rng = np.random.default_rng(config.SEED)
+    n_blocks = int(np.ceil(r.size / block))
+    starts = rng.integers(0, r.size - block + 1, size=(config.BOOT_ITERS, n_blocks))
+    idx = (starts[:, :, None] + np.arange(block)[None, None, :]).reshape(
+        config.BOOT_ITERS, -1)[:, :r.size]
+    cum = np.prod(1.0 + r[idx], axis=1) - 1.0
+    alpha = (1.0 - level) / 2.0
+    lo, hi = np.quantile(cum, [alpha, 1.0 - alpha])
+    out.update({"lo": float(lo), "hi": float(hi),
+                "inside": bool(lo <= paper_cum <= hi), "level": level,
+                "note": "%d block resamples of %d days" % (config.BOOT_ITERS, block)})
+    return out
+
+
 def evidence_table(shadow_rows) -> dict:
     """DESIGN's go-live criteria, measured — never acted on.
 
     "Go-live recommendation requires: median |fill slippage| < 10 bps,
     corr(daily paper, sim-shadow) >= 0.80, cumulative paper return inside the
-    shadow's bootstrap 90% band, no kill-switch trips in 60 days." The cumulative
-    band is the one criterion NOT computed here: it needs the bootstrap machinery
-    over a paper history that does not exist yet, and reporting a number for it
-    before there is one would be the opposite of what this table is for. Its row
-    says so.
+    shadow's bootstrap 90% band, no kill-switch trips in 60 days." All four are
+    computed; none of them does anything. A human reads the table.
+
+    ONE THRESHOLD HERE IS DELIBERATELY STRICTER THAN DESIGN'S. The kill switch in
+    the ladder is "tracking error > 25 bps/day for 20 DAYS"; this table requires
+    ZERO trips in the last 60 sessions. That is much harder, on purpose: a kill
+    switch is the point at which a running system must stop, and a go-live
+    criterion is the point at which a stopped system may start. Asking a paper
+    account to have never once diverged before it is allowed to touch real money
+    is the correct direction to be wrong in.
     """
     sim = np.array([_float(r.get("sim_net")) for r in shadow_rows])
     paper = np.array([_float(r.get("paper_net")) for r in shadow_rows])
@@ -495,6 +638,9 @@ def evidence_table(shadow_rows) -> dict:
         if np.isfinite(slip).any() else float("nan")
     recent = te[np.isfinite(te)][-60:]
     trips = int((recent > config.PAPER_MAX_TE_BPS).sum())
+    paper_cum = float(np.prod(1.0 + paper[np.isfinite(paper)]) - 1.0) \
+        if np.isfinite(paper).any() else float("nan")
+    band = cumulative_band(sim[both], paper_cum)
 
     rows = [("paper days", len(shadow_rows), ">= %d" % config.PAPER_MIN_DAYS,
              len(shadow_rows) >= config.PAPER_MIN_DAYS),
@@ -502,12 +648,17 @@ def evidence_table(shadow_rows) -> dict:
              np.isfinite(corr) and corr >= config.PAPER_MIN_CORR),
             ("median |fill slippage| bps", med_slip, "< %.0f" % config.PAPER_MAX_SLIPPAGE_BPS,
              np.isfinite(med_slip) and med_slip < config.PAPER_MAX_SLIPPAGE_BPS),
-            ("tracking trips in last 60", trips, "== 0", trips == 0),
-            ("cumulative inside bootstrap band", float("nan"),
-             "not computed before %d days" % config.PAPER_MIN_DAYS, False)]
+            ("tracking trips in last 60", trips, "== 0 (stricter than the ladder's "
+             "20-consecutive-day kill switch, on purpose)", trips == 0),
+            ("cumulative paper vs shadow band", paper_cum,
+             "inside [%s, %s] — %s" % (
+                 "n/a" if not np.isfinite(band["lo"]) else "%+.3f" % band["lo"],
+                 "n/a" if not np.isfinite(band["hi"]) else "%+.3f" % band["hi"],
+                 band.get("note", "")),
+             bool(band["inside"]))]
     return {"rows": rows, "all_pass": all(r[3] for r in rows),
             "corr": corr, "median_slippage_bps": med_slip, "trips": trips,
-            "n_days": len(shadow_rows)}
+            "band": band, "paper_cum": paper_cum, "n_days": len(shadow_rows)}
 
 
 # ── inputs ─────────────────────────────────────────────────────────────────────
@@ -533,13 +684,19 @@ def shadow_episode(entry, market, ledger_rows):
     """Replay the champion from the paper stage's start to today's last bar.
 
     Returns (agent, episode, shares, equity, peak, i0, fit_audit). The start date
-    is the first date any row of state/paper_ledger.csv carries — the day this
-    account began — and for a first-ever session, where there is no such row, the
-    market's second-to-last bar, giving the minimum one-step episode MarketEnv
-    accepts. That first session's book is flat either way: nothing has been
-    ordered yet, and the orders it produces are diffed against the broker.
+    is the first date on which this account actually TRADED, and for a first-ever
+    session, where there is no such date, the market's second-to-last bar, giving
+    the minimum one-step episode MarketEnv accepts.
+
+    "Actually traded" excludes `intended` and `rejected` rows, and that is not a
+    detail: the pre-arming life of this system is months of sessions that log
+    intended orders and send none. Starting the shadow at the first INTENDED row
+    would start the sandbox trading on a day the paper account sat flat, and the
+    two would then be compared for months across a divergence that this file
+    created. The shadow has to start where the thing it shadows started.
     """
-    dates = sorted({r.get("date") for r in ledger_rows if r.get("date")})
+    dates = sorted({r.get("date") for r in ledger_rows
+                    if r.get("date") and str(r.get("status")) not in ("intended", "rejected")})
     start = pd.Timestamp(dates[0]) if dates else market.dates[-2]
     start = min(start, market.dates[-2])       # a 1-bar window is not an episode
     agent = StrategyAgent(evolution.entry_genome(entry), market, CostModel())
@@ -644,9 +801,10 @@ def main() -> int:
         appended = append_ledger([{"date": f["date"], "symbol": f["symbol"],
                                    "side": f["side"], "qty": f["qty"],
                                    "fill_px": f["fill_px"], "order_id": f["order_id"],
-                                   "status": f["status"],
+                                   "client_order_id": "",
+                                   "status": f["status"], "broker_status": f["status"],
                                    "genome_hash": champ[0] if champ else "",
-                                   "reason": "fill"} for f in fills])
+                                   "reason": FILL_REASON} for f in fills])
         print("  fills     : %d closed order(s) since %s -> %d new ledger row(s), %d "
               "already recorded (order_id is the key)"
               % (len(fills), anchor, appended["written"], appended["skipped"]))
@@ -757,35 +915,66 @@ def main() -> int:
                   "has no Alpaca paper credentials (%s / %s, or config.local.json). "
                   "Nothing was sent; the rows below are intended."
                   % (broker_paper.ENV_KEY, broker_paper.ENV_SECRET))
-        rows, rejected_orders = [], 0
+        # THE DOUBLE-ENTRY GUARD, local half. An OPG order rests until the next
+        # auction, so a second run of the same session sees the same flat book and
+        # recomputes the same order — correctly, and catastrophically. Alpaca also
+        # queues an EVENING submission into the NEXT day's auction, so an ad-hoc
+        # evening run plus the 09:00 cron is a structural double-entry, not a
+        # user error. Symbols already sent for this session are skipped here; the
+        # client_order_id below is the half that survives a lost ledger.
+        already = submitted_today(prior, session_date.date())
+        rows, rejected_orders, blocked = [], 0, 0
         for o in orders:
-            status, order_id = "intended", ""
-            if can_submit:
+            status, order_id, broker_status = "intended", "", ""
+            coid = client_order_id(session_date.date(), o["symbol"], o["side"], o["qty"])
+            if can_submit and o["symbol"] in already:
+                blocked += 1
+                status = "intended"
+                print("      BLOCKED  %s %s x%d: this session already submitted "
+                      "%s x%s for %s (order %s). An OPG order has not filled yet, "
+                      "so sending this would DOUBLE the position, not correct it."
+                      % (o["side"], o["symbol"], o["qty"],
+                         already[o["symbol"]].get("side"), already[o["symbol"]].get("qty"),
+                         o["symbol"], already[o["symbol"]].get("order_id") or "?"))
+            elif can_submit:
                 try:
-                    res = broker.place(o["symbol"], o["side"], o["qty"])  # io-boundary
+                    res = broker.place(o["symbol"], o["side"], o["qty"],
+                                       client_order_id=coid)              # io-boundary
                 except Exception as exc:                # a broker refusal is a FACT
-                    status, order_id = "rejected", ""
+                    status, broker_status = "rejected", "exception"
                     rejected_orders += 1
                     print("      REJECTED %s %s x%d: %s"
                           % (o["side"], o["symbol"], o["qty"],
                              ("%s: %s" % (type(exc).__name__, exc))[:160]))
                 else:
-                    if res.get("executed"):
-                        status, order_id = "submitted", res.get("order_id", "")
+                    broker_status = str(res.get("status", ""))
+                    order_id = res.get("order_id", "")
+                    # `executed` only says the call returned. The VENUE'S status
+                    # says whether an order exists — submit_order can hand back an
+                    # order that is already rejected, and a row that read
+                    # "submitted" off the absence of an exception would claim a
+                    # position this account does not hold.
+                    if res.get("executed") and res.get("live", True):
+                        status = "submitted"
                         submitted += 1
                     else:
                         status = "rejected"
                         rejected_orders += 1
-                        print("      REFUSED  %s %s x%d: %s"
-                              % (o["side"], o["symbol"], o["qty"], res.get("reason")))
+                        print("      REFUSED  %s %s x%d: broker status %s%s"
+                              % (o["side"], o["symbol"], o["qty"],
+                                 broker_status or "?",
+                                 " (%s)" % res.get("reason") if res.get("reason") else ""))
             rows.append({"date": str(session_date.date()), "symbol": o["symbol"],
                          "side": o["side"], "qty": o["qty"], "fill_px": "",
-                         "order_id": order_id, "status": status,
+                         "order_id": order_id, "client_order_id": coid,
+                         "status": status, "broker_status": broker_status,
                          "genome_hash": champ[0], "reason": o["reason"]})
         wrote = append_ledger(rows)
-        print("  ledger    : %d row(s) appended, %d already on record (%s)"
-              % (wrote["written"], wrote["skipped"],
-                 "status=submitted" if submitted else "status=intended"))
+        print("  ledger    : %d row(s) appended, %d already on record (%d submitted, "
+              "%d intended, %d rejected, %d blocked as duplicates)"
+              % (wrote["written"], wrote["skipped"], submitted,
+                 sum(1 for r in rows if r["status"] == "intended"), rejected_orders,
+                 blocked))
         if not arm["armed"]:
             print("              UNARMED, so every row above is INTENDED and no order "
                   "reached a broker: %s." % arm["reason"])
@@ -801,10 +990,19 @@ def main() -> int:
     # ── 5. the shadow row ─────────────────────────────────────────────────────
     print("\n  ── sim-shadow %s" % ("─" * 60))
     shadow_rows = read_shadow()
+    session_ok, why_not = (False, "")
+    if shadow is not None and broker.credentialed:
+        # The EXCHANGE clock, not this machine's: the question is whether the
+        # session being measured has ended, and only the venue can answer it.
+        session_ok, why_not = shadow_session_ok(_safe_clock(broker))    # io-boundary
     if shadow is None or not broker.credentialed:
         print("  no row: a shadow compares the paper account against the sandbox, and "
               "there is %s." % ("no champion to simulate" if shadow is None
                                 else "no paper account to read"))
+    elif not session_ok:
+        print("  no row: %s.\n          Nothing is written rather than written wrong "
+              "— a shadow row is recorded once per date and would block the correct "
+              "one forever." % why_not)
     else:
         acct = broker.account()                                         # io-boundary
         ep = shadow["episode"]
@@ -859,8 +1057,12 @@ def main() -> int:
             title, body = alerts_arena.paper_summary(
                 "go-live-candidate", champion=champ[0] if champ else None,
                 n_days=table["n_days"], slippage_bps=table["median_slippage_bps"],
-                detail="corr %.2f, %d tracking trips in the last 60 sessions."
-                       % (table["corr"], table["trips"]))
+                detail="corr %.2f, %d tracking trips in the last 60 sessions, "
+                       "cumulative %+.3f inside the shadow's %.0f%% block-bootstrap "
+                       "band [%+.3f, %+.3f]."
+                       % (table["corr"], table["trips"], table["paper_cum"],
+                          100 * table["band"].get("level", 0.90),
+                          table["band"]["lo"], table["band"]["hi"]))
             alerts_arena.send_transition(
                 "paper-golive", {"champion": champ[0] if champ else "",
                                  "status": "go-live-candidate"},
