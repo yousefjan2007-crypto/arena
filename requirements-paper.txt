@@ -1,0 +1,15 @@
+# The PAPER STAGE's one extra dependency, kept out of requirements.txt on purpose.
+#
+# docs/DESIGN.md pins the modelling dependency set (numpy, pandas, scipy,
+# scikit-learn, statsmodels, arch, yfinance, matplotlib, joblib + stdlib), and
+# alpaca-py is not a modelling dependency: it is an execution client that drags
+# pydantic, requests, websockets, msgpack and sseclient into whatever environment
+# installs it. The generation and deep-eval workflows are where every number in
+# state/ is produced, and they have no business carrying an HTTP trading SDK, so
+# only paper.yml installs this file.
+#
+# Nothing in arena IMPORTS alpaca at module level either — broker_paper.py loads
+# it lazily inside the two methods that talk to the account — so an unarmed paper
+# session, verify.py, and every other entry point run fine without it.
+-r requirements.txt
+alpaca-py==0.43.2
