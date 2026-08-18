@@ -523,6 +523,31 @@ if __name__ == "__main__":
         print("    [ok] %-9s <- %-11s %2d config attrs resolved"
               % (_mod, os.path.basename(_proj), len(_attrs)))
 
+    # THE VENDORING CONTRACT, checked rather than asserted in a comment: every file
+    # under vendor/ must be byte-identical to its source below the three-line
+    # header. This is the real proof that the runner runs the same code as this
+    # Mac — features.py's panel comparison is the end-to-end check on top of it,
+    # and that one can only run while both caches still hold the same vintage.
+    _VENDOR_HEADER_LINES = 3
+    if os.path.isdir(VENDOR_DIR):
+        _drift, _n = [], 0
+        for _proj in sorted(os.listdir(VENDOR_DIR)):
+            for _name in sorted(os.listdir(os.path.join(VENDOR_DIR, _proj))):
+                if not _name.endswith(".py"):
+                    continue
+                _live = os.path.join(HOME, _proj, _name)
+                if not os.path.exists(_live):
+                    continue                    # no sibling checkout: nothing to compare
+                _n += 1
+                with open(os.path.join(VENDOR_DIR, _proj, _name), "rb") as _f:
+                    _body = _f.read().split(b"\n", _VENDOR_HEADER_LINES)[-1]
+                with open(_live, "rb") as _f:
+                    if _f.read() != _body:
+                        _drift.append("%s/%s" % (_proj, _name))
+        print("  vendored   : %d file(s) byte-identical to their source%s"
+              % (_n, "" if not _drift else
+                 " EXCEPT %s — re-vendor before trusting a cloud run" % ", ".join(_drift)))
+
     _items = config_hash_items()
     print("  config_hash: %s  (%d settings: %s ...)"
           % (config_hash(), len(_items), ", ".join(n for n, _ in _items[:5])))

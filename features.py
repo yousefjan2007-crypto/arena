@@ -310,16 +310,34 @@ if __name__ == "__main__":
     # a stylistic equivalence: panel_hash is the like-for-like identity gate G1
     # compares, so if these two ever disagree, Mac results and cloud results stop
     # being comparable and the ledger's identity columns start lying.
+    #
+    # ONE PRECONDITION, AND IT EXPIRES. The two legs read two different caches —
+    # sell_in_may's on the Mac, arena's committed data/cache when vendored — and
+    # they hold the same bars only until the cloud refreshes one of them. yfinance
+    # restates its adjusted history at ~3e-7 relative on every fetch, so the two
+    # diverge the first time a runner refreshes and never converge again. A
+    # panel_hash comparison across two data vintages would be a FAIL that says
+    # nothing about the code, so the data hashes are checked first and a mismatch
+    # reports NOT COMPARABLE rather than failure. Code parity is proven
+    # unconditionally by `python3 config.py`, which byte-compares every vendored
+    # file against its source; this is the end-to-end check on top of it.
     if not config.VENDORED and os.path.isdir(config.VENDOR_DIR):
         env = dict(os.environ, ARENA_FORCE_VENDOR="1")              # io-boundary
         out = subprocess.run([sys.executable, os.path.abspath(__file__), "--panel-hash"],
                              capture_output=True, text=True, env=env, cwd=config.ROOT)
         line = next((l for l in out.stdout.splitlines() if l.startswith("PANELHASH")), "")
         parts = line.split()
-        agree = len(parts) == 5 and parts[1] == md.data_hash and parts[2] == fresh_hash
-        print("  vendor parity: %s  live %s / vendored %s over %s symbols x %s features "
-              "(both recomputed from source, memo bypassed)"
-              % ("PASS" if agree else "FAIL", fresh_hash, parts[2] if len(parts) == 5 else "?",
-                 parts[3] if len(parts) == 5 else "?", parts[4] if len(parts) == 5 else "?"))
-        if not agree and out.stderr:
-            print("  vendored leg stderr: %s" % out.stderr.strip().splitlines()[-1][:200])
+        if len(parts) != 5:
+            print("  vendor parity: FAIL — the vendored leg produced no panel hash%s"
+                  % (": %s" % out.stderr.strip().splitlines()[-1][:200] if out.stderr else ""))
+        elif parts[1] != md.data_hash:
+            print("  vendor parity: NOT COMPARABLE — the two caches hold different "
+                  "vintages (live data %s, vendored data %s). arena/data/cache has "
+                  "been refreshed by a cloud run since it was seeded; re-seed it from "
+                  "%s to compare panels again."
+                  % (md.data_hash, parts[1], os.path.basename(config.CACHE_DIR)))
+        else:
+            print("  vendor parity: %s  live %s / vendored %s over %s symbols x %s "
+                  "features (both recomputed from source, memo bypassed)"
+                  % ("PASS" if parts[2] == fresh_hash else "FAIL", fresh_hash,
+                     parts[2], parts[3], parts[4]))
