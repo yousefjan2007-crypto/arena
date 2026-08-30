@@ -179,7 +179,13 @@ SEED = _sm.SEED                     # 12345 — the single reproducibility seed
 TRADING_DAYS_YEAR = 252
 DATA_START = "1995-01-01"           # start of the replayed sandbox history
 UNIVERSE_SIZE = 120                 # symbols carried into the full-fidelity evaluation
-VAULT_START = "2020-01-01"          # days >= this are the vault: gates only, never fitness
+VAULT_START = "2023-01-01"          # days >= this are the vault: gates only, never fitness.
+                                    # Moved from 2020-01-01 on 2026-08-30 — a deliberate,
+                                    # logged decision: selection was frozen at 2019 while
+                                    # the market kept moving. The 2020-2022 data it
+                                    # releases had been shown to exactly 4 gate
+                                    # evaluations (state/vault_access.csv). Revisit
+                                    # annually, by hand, in this file.
 
 # ── account & constraints (small-account realism) ──────────────────────────────
 START_CASH = 15_000.0               # mid of the user's $10-25K, conservative
@@ -272,7 +278,9 @@ N_JOBS = int(os.environ.get("ARENA_N_JOBS") or 8)
 # evaluate.py asserts it rather than trusting this comment.
 SCREEN_ERAS = [("1997-01-01", "2001-12-31"),      # dot-com run-up and bust
                ("2007-01-01", "2011-12-31"),      # GFC and the recovery
-               ("2015-01-01", "2019-12-31")]      # low-vol grind + 2018 shakeout
+               ("2015-01-01", "2019-12-31"),      # low-vol grind + 2018 shakeout
+               ("2018-01-01", "2022-12-31")]      # COVID crash+rebound, 2021 froth,
+                                                  # 2022 rate shock
 SCREEN_UNIVERSE_N = 60              # symbols per era, ranked point-in-time (see below)
 SCREEN_REFIT_DAYS = 252             # F0 forces yearly refits whatever the genome asks
 SCREEN_MIN_REBALANCE_DAYS = 5       # ...and at most weekly rebalancing

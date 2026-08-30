@@ -1808,7 +1808,7 @@ def test_trial_ledger():
               % (len(shadowed), ", ".join(shadowed), len(covered), config.config_hash()))
 
         # The returns matrix refuses to store anything the vault owns.
-        dates = pd.bdate_range("2019-11-01", periods=60)             # crosses 2020-01-01
+        dates = pd.bdate_range("2022-11-01", periods=60)             # crosses 2023-01-01
         bad = {genomes[0].hash(): {"dates": dates,
                                    "daily_net": np.zeros(60), "daily_gross": np.zeros(60),
                                    "turnover": np.zeros(60), "costs": np.zeros(60)}}
