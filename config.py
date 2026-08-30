@@ -283,6 +283,14 @@ SCREEN_ERAS = [("1997-01-01", "2001-12-31"),      # dot-com run-up and bust
                                                   # 2022 rate shock
 SCREEN_UNIVERSE_N = 60              # symbols per era, ranked point-in-time (see below)
 SCREEN_REFIT_DAYS = 252             # F0 forces yearly refits whatever the genome asks
+
+# F1 fitness is the FITNESS_QUANTILE quantile of rolling-window Sharpes, not the
+# full-span Sharpe: a strategy carried by one golden regime scores its bad
+# quartile, which is what the G8/G9 gates will test anyway. F0 takes min(eras)
+# for the same reason. sharpe_prevault (reports, hall of fame) is unchanged.
+FITNESS_WINDOW_DAYS = 756           # 3 trading years per window
+FITNESS_WINDOW_STEP = 252           # windows step yearly -> ~18 windows on full history
+FITNESS_QUANTILE = 0.25
 SCREEN_MIN_REBALANCE_DAYS = 5       # ...and at most weekly rebalancing
 SCREEN_LIQUIDITY_DAYS = 252         # trailing window for the era's dollar-volume rank
 SCREEN_LIQUIDITY_MIN_BARS = 21      # a symbol needs this many bars in it to be ranked

@@ -2566,6 +2566,27 @@ def test_evolution_diversity():
                            family="hgb").signal.family == "hgb", "")
 
 
+def test_robust_fitness():
+    print("\n[fitness] the quantile score punishes one-regime wonders")
+    import evaluate as ev
+    rng = np.random.default_rng(config.SEED)
+    n = 5040                                            # ~20y of days
+    dates = pd.date_range("1999-01-04", periods=n, freq="B")
+    steady = rng.normal(0.0004, 0.01, n)                # decent everywhere
+    lumpy = np.concatenate([rng.normal(0.0016, 0.01, n // 4),   # one golden era
+                            rng.normal(-0.0001, 0.01, n - n // 4)])
+    s_steady = ev.robust_score(steady, dates, 0)
+    s_lumpy = ev.robust_score(lumpy, dates, 0)
+    check("robust score exists and is finite", np.isfinite(s_steady), "%.3f" % s_steady)
+    check("steady beats lumpy despite similar full-span Sharpe",
+          s_steady > s_lumpy,
+          "steady %.3f vs lumpy %.3f (full-span %.3f vs %.3f)"
+          % (s_steady, s_lumpy, ev.sharpe(steady), ev.sharpe(lumpy)))
+    short = rng.normal(0.0004, 0.01, 300)
+    check("short series falls back to plain sharpe",
+          np.isclose(ev.robust_score(short, dates[:300], 0), ev.sharpe(short)), "")
+
+
 def main() -> int:
     test_planted_leak()
     test_determinism()
@@ -2579,6 +2600,7 @@ def main() -> int:
     test_evolution_diversity()
     test_no_wallclock()
     test_pbo_sanity()
+    test_robust_fitness()
     test_paper_stage()
     print("\nVERIFY:", "ALL PASS" if ok else "FAILURES PRESENT")
     return 0 if ok else 1

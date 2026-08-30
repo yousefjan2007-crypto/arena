@@ -253,7 +253,8 @@ def screen(genome, market, cost=None, era_markets=None) -> dict:
     1997 era only reaches WF_MIN_TRAIN_DAYS of history in 1999) is treated as
     "no evidence" rather than "no skill".
 
-    Score = mean(era Sharpes) − PARSIMONY_PENALTY × n_features. The tax is on the
+    Score = min(era Sharpes) − PARSIMONY_PENALTY × n_features — the WORST era,
+    so a screen cannot be carried by one golden regime. The tax is on the
     GENOME's feature count, not the screened copy's — they are the same, but the
     distinction is the rule: F0 may change how a genome is simulated, never what
     it is.
@@ -273,13 +274,30 @@ def screen(genome, market, cost=None, era_markets=None) -> dict:
         n_days += len(scored)
 
     n_features = len(genome.signal.features)
-    return {"score": float(np.mean(era_sharpes)) - config.PARSIMONY_PENALTY * n_features,
+    return {"score": float(np.min(era_sharpes)) - config.PARSIMONY_PENALTY * n_features,
             "era_sharpes": [float(s) for s in era_sharpes],
             "n_features": n_features,
             "n_days": int(n_days)}
 
 
 # ── F1: the full anchored walk-forward ─────────────────────────────────────────
+def robust_score(daily_net, dates, n_features) -> float:
+    """Selection currency for F1: the FITNESS_QUANTILE quantile of rolling
+    FITNESS_WINDOW_DAYS-day Sharpes (stepped FITNESS_WINDOW_STEP), minus the
+    parsimony tax; falls back to the full-span Sharpe when fewer than 4 windows
+    fit. A strategy carried by one golden regime scores its bad quartile — which
+    is what gates G8/G9 will measure anyway, so selection now optimizes what the
+    gates test. `sharpe_prevault` is unchanged: reports and the hall of fame
+    keep the plain full-span number."""
+    r = np.asarray(daily_net, dtype=np.float64)
+    w, s = int(config.FITNESS_WINDOW_DAYS), int(config.FITNESS_WINDOW_STEP)
+    srs = [sharpe(r[i:i + w]) for i in range(0, max(0, len(r) - w) + 1, s)
+           if i + w <= len(r)]
+    base = (float(np.quantile(srs, config.FITNESS_QUANTILE))
+            if len(srs) >= 4 else sharpe(r))
+    return base - config.PARSIMONY_PENALTY * int(n_features)
+
+
 def full_eval(genome, market, cost=None) -> dict:
     """F1. One full-history episode, the genome's own genes, split at the vault.
 
@@ -294,8 +312,9 @@ def full_eval(genome, market, cost=None) -> dict:
                             gate stack can ask for it through a counted access —
                             and read by nothing else, ever.
 
-    `score` = pre-vault net Sharpe − PARSIMONY_PENALTY × n_features, the same
-    currency as the F0 score so the two ladders are at least comparable in units.
+    `score` = robust_score(pre-vault daily_net) — the bad quartile of rolling
+    3-year Sharpes minus the parsimony tax, the same currency as the F0 score so
+    the two ladders are at least comparable in units.
 
     Scoring starts at the episode's own first active bar (see `_first_active`), so
     a model's warm-up and a rule's WF_MIN_TRAIN_DAYS handicap are both read off
@@ -313,7 +332,7 @@ def full_eval(genome, market, cost=None) -> dict:
 
     sr = sharpe(res["daily_net"][pre])
     n_features = len(genome.signal.features)
-    return {"score": sr - config.PARSIMONY_PENALTY * n_features,
+    return {"score": robust_score(res["daily_net"][pre], dates[pre], n_features),
             "sharpe_prevault": sr,
             "n_days_prevault": int(max(0, vault_i - first)),
             "daily_net": res["daily_net"][pre],
