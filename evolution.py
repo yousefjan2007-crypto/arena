@@ -97,6 +97,24 @@ def op_counts(entries) -> dict:
     return out
 
 
+def _family_of(entry_or_genome) -> str:
+    if isinstance(entry_or_genome, dict):
+        return entry_or_genome["genome"]["signal"]["family"]
+    return entry_or_genome.signal.family
+
+
+def _cap_count(n_pop: int) -> int:
+    import math
+    return int(math.ceil(config.FAMILY_MAX_FRAC * n_pop))
+
+
+def _under_cap_family(fam_counts: dict) -> str:
+    """The least-represented family; BOUNDS declaration order breaks ties, so the
+    choice is a function of the counts alone."""
+    return min(gn.BOUNDS["families"], key=lambda f: (fam_counts.get(f, 0),
+               gn.BOUNDS["families"].index(f)))
+
+
 # ── slot arithmetic ────────────────────────────────────────────────────────────
 def slot_counts(n_pop: int) -> tuple:
     """(elites, immigrants, offspring) for a population of `n_pop`.
@@ -184,7 +202,8 @@ def next_generation(pop_entries, scores, generation: int, feature_names) -> list
     entries = list(pop_entries)
     if not entries:
         raise ValueError("next_generation needs a non-empty population")
-    n_elite, n_imm, n_off = slot_counts(len(entries))
+    n_pop = max(len(entries), int(getattr(config, "POP_TARGET", 0)))
+    n_elite, n_imm, n_off = slot_counts(n_pop)
     birth_gen = int(generation) + 1
 
     # Distinct hashes: a population that somehow holds one genome twice must not
@@ -229,18 +248,42 @@ def next_generation(pop_entries, scores, generation: int, feature_names) -> list
             child = _fresh(generation, "dedup", slot, seen, feature_names)
             op, parent = "immigrant", ""
 
+        fam_counts = {}
+        for e in out:
+            fam_counts[_family_of(e)] = fam_counts.get(_family_of(e), 0) + 1
+        if fam_counts.get(_family_of(child), 0) + 1 > _cap_count(n_pop):
+            # The cap replaces the child, not the operator's stream: _fresh has its
+            # own per-slot rng, so nothing downstream shifts.
+            child = _fresh(generation, "cap", slot, seen, feature_names,
+                           family=_under_cap_family(fam_counts))
+            op, parent = "immigrant", ""
+
         out.append(make_entry(child, op, parent, birth_gen))
         seen.add(child.hash())
 
     for slot in range(n_imm):
-        g = _fresh(generation, "imm", slot, seen, feature_names)
+        # Stratified: immigrant slots cycle the family list, so the diversity
+        # floor reaches every family rather than wherever the uniform draw lands.
+        # An immigrant obeys the family cap too — a cycled family already at cap
+        # falls back to the least-represented one, or the floor itself could
+        # push a family one past the cap the offspring loop just enforced.
+        fam_counts = {}
+        for e in out:
+            fam_counts[_family_of(e)] = fam_counts.get(_family_of(e), 0) + 1
+        fam = gn.BOUNDS["families"][slot % len(gn.BOUNDS["families"])]
+        if fam_counts.get(fam, 0) + 1 > _cap_count(n_pop):
+            fam = _under_cap_family(fam_counts)
+        g = _fresh(generation, "imm", slot, seen, feature_names, family=fam)
         out.append(make_entry(g, "immigrant", "", birth_gen))
         seen.add(g.hash())
     return out
 
 
-def _fresh(generation: int, tag: str, slot: int, seen: set, feature_names):
+def _fresh(generation: int, tag: str, slot: int, seen: set, feature_names,
+           family=None):
     """A uniform draw from BOUNDS that is not already in the new population.
+    `family` forces the signal family (the cap's replacement immigrants and the
+    stratified immigrant slots).
 
     Retries advance the SAME per-slot stream rather than reseeding, so the draw
     stays a function of (SEED, generation, tag, slot) and of how full the
@@ -250,11 +293,11 @@ def _fresh(generation: int, tag: str, slot: int, seen: set, feature_names):
     looping forever would cost the generation.
     """
     rng = gn.child_rng(config.SEED, generation, tag, slot)
-    g = gn.random_genome(rng, feature_names)
+    g = gn.random_genome(rng, feature_names, family=family)
     for _ in range(config.DEDUP_MAX_TRIES):
         if g.hash() not in seen:
             break
-        g = gn.random_genome(rng, feature_names)
+        g = gn.random_genome(rng, feature_names, family=family)
     return g
 
 

@@ -481,6 +481,11 @@ DET_CONFIG = {
                     ("2001-11-01", "2002-04-30")],
     "VAULT_START": "2002-07-01",
     "WF_MIN_TRAIN_DAYS": 80,
+    # Keep this test at its designed scale: POP_TARGET would breed the 8-genome
+    # seed up to 64 and blow the one-genome-per-run leg past DET_MAX_RUNS.
+    # Determinism OF the growth path is proved by test_evolution_diversity's
+    # pair-run; this test proves the evaluation machinery byte-for-byte.
+    "POP_TARGET": DET_POP,
 }
 
 
@@ -2396,6 +2401,46 @@ def test_paper_stage():
           "replayed $%.2f vs episode $%.2f" % last)
 
 
+def test_evolution_diversity():
+    """Task 1: the population grows to POP_TARGET, no family may exceed
+    FAMILY_MAX_FRAC of it, and immigrants are stratified across families —
+    all of it a pure function of (population, scores, generation)."""
+    print("\n[diversity] family cap, population target, stratification")
+    import evolution as ev
+    import genome as gn
+    DEMO = ("bb_z", "credit_mom21", "ema50_200", "mom_12_1", "mom_21", "mom_63",
+            "mom_126", "px_ema200", "rev_5", "rsi", "rs_spy", "rv21", "seasonality",
+            "us10y", "vix_pct", "vol_regime", "xs_mom_63", "xs_rs_spy")
+    # A 12-genome monoculture: every entry the same family, mirroring gen 28.
+    seed = []
+    for i in range(12):
+        rng = gn.child_rng(config.SEED, 0, "divtest", i)
+        g = gn.random_genome(rng, DEMO, family="seasonal_rule")
+        seed.append(ev.make_entry(g, "seed", "", 0))
+    scores = {e["hash"]: (int(e["hash"][:6], 16) % 1000) / 500.0 - 1.0 for e in seed}
+
+    a = ev.next_generation(seed, scores, 5, DEMO)
+    b = ev.next_generation(seed, scores, 5, DEMO)
+    check("grows to POP_TARGET", len(a) == config.POP_TARGET,
+          "%d slots (target %d)" % (len(a), config.POP_TARGET))
+    check("deterministic pair-run", [e["hash"] for e in a] == [e["hash"] for e in b], "")
+
+    import math
+    cap = int(math.ceil(config.FAMILY_MAX_FRAC * len(a)))
+    fams = {}
+    for e in a:
+        fam = e["genome"]["signal"]["family"]
+        fams[fam] = fams.get(fam, 0) + 1
+    worst = max(fams.items(), key=lambda kv: kv[1])
+    check("family cap holds", worst[1] <= cap,
+          "%s holds %d of %d (cap %d)" % (worst[0], worst[1], len(a), cap))
+    check("all six families present", len(fams) == len(gn.BOUNDS["families"]),
+          ", ".join(sorted(fams)))
+    check("forced-family draw honours family",
+          gn.random_genome(gn.child_rng(config.SEED, 0, "ff", 0), DEMO,
+                           family="hgb").signal.family == "hgb", "")
+
+
 def main() -> int:
     test_planted_leak()
     test_determinism()
@@ -2406,6 +2451,7 @@ def main() -> int:
     test_gates()
     test_trial_ledger()
     test_genome_ops()
+    test_evolution_diversity()
     test_no_wallclock()
     test_pbo_sanity()
     test_paper_stage()

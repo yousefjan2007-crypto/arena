@@ -242,6 +242,17 @@ HOF_SIZE = 10                       # hall-of-fame depth (top-N all-time by pre-
 # population breeds nothing at all — so evolution.slot_counts caps the two carried
 # groups at this fraction and scales them down proportionally. A no-op at POP_SIZE.
 EVOLVE_MAX_CARRY_FRAC = 0.5
+# The population BREEDS UP to this size when it is smaller (gen 28 ran 12 genomes
+# against constants sized for 64). Unlike POP_SIZE (seed-only), this binds every
+# generation: next_generation targets max(len(pop), POP_TARGET). Deliberately in
+# the config hash — growing the search is a change of WHAT, not how fast.
+POP_TARGET = 64
+# No signal family may hold more than this fraction of the bred population. The
+# only diversity mechanisms before this were exact-hash dedup and 4 immigrants —
+# by gen 28, 8 of 12 genomes and 10 of 10 hall-of-fame rows were one family.
+# A child that would breach the cap is replaced by a fresh immigrant forced to
+# the least-represented family (BOUNDS order breaks ties) — deterministic.
+FAMILY_MAX_FRAC = 0.34
 # The three knobs below are HOW FAST, NOT WHAT — they are in _CONFIG_HASH_SKIP, so
 # none of them can move a result's identity, which is exactly why they are the
 # three the environment is allowed to override. The runner has 4 vCPUs and a 6-hour

@@ -323,10 +323,10 @@ def _random_risk(rng):
                     dd_limit=_pick(rng, rg["dd_limit"]))
 
 
-def random_genome(rng, feature_names) -> Genome:
+def random_genome(rng, feature_names, family=None) -> Genome:
     """A uniformly drawn member of BOUNDS — the immigrant operator, and the seed
-    population."""
-    return _repair(Genome(signal=_random_signal(rng, feature_names),
+    population. `family` forces the signal family (stratified immigrants)."""
+    return _repair(Genome(signal=_random_signal(rng, feature_names, family=family),
                           portfolio=_random_portfolio(rng),
                           risk=_random_risk(rng)), feature_names)
 
