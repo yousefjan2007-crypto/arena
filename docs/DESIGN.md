@@ -141,7 +141,8 @@ those stay append-only.
 
 Key `config.py` defaults (all thresholds live here — no hidden module
 constants): `SEED=12345`; `DATA_START="1995-01-01"`; `UNIVERSE_SIZE=120`;
-`VAULT_START="2020-01-01"`; `START_CASH=15_000` (mid of user's $10–25K,
+`VAULT_START="2023-01-01"` (moved from 2020-01-01 on 2026-08-30; revisit
+annually by hand); `START_CASH=15_000` (mid of user's $10–25K,
 conservative); `MAX_GROSS_LEV=1.5, MAX_NET_LEV=1.0, MAX_POSITIONS=20,
 MAX_NAME_WEIGHT=0.20, MIN_POSITION_USD=500, WHOLE_SHARES=True`;
 `COMMISSION_BPS=0.5, COMMISSION_MIN=1.00, HALF_SPREAD_BPS=2.5,
@@ -220,10 +221,13 @@ Effective space ~10⁶–10⁸ — searchable by 64 genomes × ~40 evals/night.
 ## Evolution + honest evaluation (`evaluate.py`, `evolution.py`, `ledger.py`)
 
 **The vault (structural anti-snooping):** all fitness/selection uses OOS days
-**before `VAULT_START` (2020-01-01) only**. 2020→present is touched solely by
-weekly promotion gates; every vault access increments `vault_trials` and
-vault-DSR is deflated by that count. Selection can't overfit the recent 6
-years; paper/live extends the vault forward.
+**before `VAULT_START` only** (2023-01-01 since 2026-08-30; originally
+2020-01-01 — the bump released 2020–2022, then held by exactly 4 logged gate
+looks, into selection so the search is not permanently frozen at 2019).
+Boundary→present is touched solely by weekly promotion gates; every vault
+access increments `vault_trials` and vault-DSR is deflated by that count.
+Selection can't overfit the untouched recent years; paper/live extends the
+vault forward.
 
 **Nightly generation (`run_generation.py`):**
 1. Data refresh via `sell_in_may/data.py` (cache-first; abort with alert if

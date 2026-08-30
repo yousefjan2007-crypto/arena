@@ -179,7 +179,13 @@ SEED = _sm.SEED                     # 12345 — the single reproducibility seed
 TRADING_DAYS_YEAR = 252
 DATA_START = "1995-01-01"           # start of the replayed sandbox history
 UNIVERSE_SIZE = 120                 # symbols carried into the full-fidelity evaluation
-VAULT_START = "2020-01-01"          # days >= this are the vault: gates only, never fitness
+VAULT_START = "2023-01-01"          # days >= this are the vault: gates only, never fitness.
+                                    # Moved from 2020-01-01 on 2026-08-30 — a deliberate,
+                                    # logged decision: selection was frozen at 2019 while
+                                    # the market kept moving. The 2020-2022 data it
+                                    # releases had been shown to exactly 4 gate
+                                    # evaluations (state/vault_access.csv). Revisit
+                                    # annually, by hand, in this file.
 
 # ── account & constraints (small-account realism) ──────────────────────────────
 START_CASH = 15_000.0               # mid of the user's $10-25K, conservative
@@ -233,7 +239,11 @@ ELITE_N = 4
 IMMIGRANT_N = 4
 TOURNAMENT_K = 4
 SCREEN_FRAC = 0.5                   # fraction of the population surviving the F0 screen
-PARSIMONY_PENALTY = 0.01            # Sharpe penalty per feature (complexity tax)
+PARSIMONY_PENALTY = 0.003           # Sharpe penalty per feature (complexity tax);
+                                    # was 0.01: a 12-feature model paid 0.12 Sharpe
+                                    # vs a zero-feature rule's 0.00 — a structural
+                                    # bias toward exactly the static families, on
+                                    # top of the model warm-up handicap.
 DEDUP_MAX_TRIES = 10                # re-mutations before a colliding child is replaced
                                     # by a fresh immigrant (evolution.next_generation)
 HOF_SIZE = 10                       # hall-of-fame depth (top-N all-time by pre-vault Sharpe)
@@ -242,6 +252,17 @@ HOF_SIZE = 10                       # hall-of-fame depth (top-N all-time by pre-
 # population breeds nothing at all — so evolution.slot_counts caps the two carried
 # groups at this fraction and scales them down proportionally. A no-op at POP_SIZE.
 EVOLVE_MAX_CARRY_FRAC = 0.5
+# The population BREEDS UP to this size when it is smaller (gen 28 ran 12 genomes
+# against constants sized for 64). Unlike POP_SIZE (seed-only), this binds every
+# generation: next_generation targets max(len(pop), POP_TARGET). Deliberately in
+# the config hash — growing the search is a change of WHAT, not how fast.
+POP_TARGET = 64
+# No signal family may hold more than this fraction of the bred population. The
+# only diversity mechanisms before this were exact-hash dedup and 4 immigrants —
+# by gen 28, 8 of 12 genomes and 10 of 10 hall-of-fame rows were one family.
+# A child that would breach the cap is replaced by a fresh immigrant forced to
+# the least-represented family (BOUNDS order breaks ties) — deterministic.
+FAMILY_MAX_FRAC = 0.34
 # The three knobs below are HOW FAST, NOT WHAT — they are in _CONFIG_HASH_SKIP, so
 # none of them can move a result's identity, which is exactly why they are the
 # three the environment is allowed to override. The runner has 4 vCPUs and a 6-hour
@@ -257,9 +278,19 @@ N_JOBS = int(os.environ.get("ARENA_N_JOBS") or 8)
 # evaluate.py asserts it rather than trusting this comment.
 SCREEN_ERAS = [("1997-01-01", "2001-12-31"),      # dot-com run-up and bust
                ("2007-01-01", "2011-12-31"),      # GFC and the recovery
-               ("2015-01-01", "2019-12-31")]      # low-vol grind + 2018 shakeout
+               ("2015-01-01", "2019-12-31"),      # low-vol grind + 2018 shakeout
+               ("2018-01-01", "2022-12-31")]      # COVID crash+rebound, 2021 froth,
+                                                  # 2022 rate shock
 SCREEN_UNIVERSE_N = 60              # symbols per era, ranked point-in-time (see below)
 SCREEN_REFIT_DAYS = 252             # F0 forces yearly refits whatever the genome asks
+
+# F1 fitness is the FITNESS_QUANTILE quantile of rolling-window Sharpes, not the
+# full-span Sharpe: a strategy carried by one golden regime scores its bad
+# quartile, which is what the G8/G9 gates will test anyway. F0 takes min(eras)
+# for the same reason. sharpe_prevault (reports, hall of fame) is unchanged.
+FITNESS_WINDOW_DAYS = 756           # 3 trading years per window
+FITNESS_WINDOW_STEP = 252           # windows step yearly -> ~18 windows on full history
+FITNESS_QUANTILE = 0.25
 SCREEN_MIN_REBALANCE_DAYS = 5       # ...and at most weekly rebalancing
 SCREEN_LIQUIDITY_DAYS = 252         # trailing window for the era's dollar-volume rank
 SCREEN_LIQUIDITY_MIN_BARS = 21      # a symbol needs this many bars in it to be ranked
@@ -287,6 +318,8 @@ P_MUT_FEATURE = 0.30                # add / drop / swap one feature
 P_MUT_BLOCK = 0.15                  # resample a whole gene block
 P_MUT_FAMILY = 0.05                 # hop to another signal family
 CROSSOVER_FRAC = 0.25               # share of offspring bred by crossover
+P_BEAR_SIGNAL = 0.25                # immigrant/seed draw prob of carrying a
+                                    # bear-regime signal (given a regime filter)
 MUT_MAX_TRIES = 4                   # bound on re-drawing a mutation that changed nothing
                                     # (a genome sitting on the n_long+n_short floor can
                                     # have single steps undone by the repair)

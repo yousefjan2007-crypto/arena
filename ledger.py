@@ -5,7 +5,7 @@ The trial ledger: every genome arena ever evaluated, appended and never rewritte
     n_trials()                 distinct genomes ever evaluated  -> DSR's N
     dsr_trial_sharpes()        one DAILY Sharpe per genome      -> DSR's all_sharpes
     trial_sr_std()             empirical spread of F1 Sharpes   -> reports
-    record_vault_access(...)   every look at post-2020 data, counted
+    record_vault_access(...)   every look at post-VAULT_START data, counted
     write_returns_matrix(...)  the Tier-A (days x genomes) artifact DSR/PBO read
 
 THIS FILE IS THE ANSWER TO SIGNAL_LAB'S TWO WORST FAILURES (docs/DESIGN.md "Why

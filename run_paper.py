@@ -384,9 +384,10 @@ def live_decision(agent, market, shares, equity, peak_equity, i0: int, fit_audit
     fills at t+1, so it stops deciding at the second-to-last bar, while a paper
     session at 09:00 ET is standing exactly on the last bar with the next open
     ahead of it. So the loop body is executed once more here — and ONLY the loop
-    body: every quantity comes from the agent's own methods (`_scores`,
-    `_targets`, `_stopped`, `_overlay_scale`, `_fit`), so the decision the broker
-    is handed cannot drift from the decision the sandbox scores. Nothing about
+    body: every quantity comes from the agent's own machinery (the signal
+    engines' `scores`/`fit`, `_targets`, `_stopped`, `_overlay_scale`), so the
+    decision the broker is handed cannot drift from the decision the sandbox
+    scores. Nothing about
     portfolio construction, sizing, stops or regime overlays is restated here;
     verify.py pins the equivalence directly (test 12).
 
@@ -401,15 +402,30 @@ def live_decision(agent, market, shares, equity, peak_equity, i0: int, fit_audit
     out = {"t": t, "date": market.dates[t], "step": step, "refitted": False,
            "rebalanced": False}
 
-    if agent.is_model:
-        last_fit = _last_fit_step(fit_audit, market, i0)
-        if last_fit is None or step - last_fit >= genome.signal.refit_days:
-            out["refitted"] = bool(agent._fit(t, fit_audit))            # noqa: SLF001
+    # Mirrors run_episode's loop body exactly, two-book switch included: each
+    # engine refits on its own cadence (its last fit read off ITS audit rows),
+    # and a regime transition — detected against the PREVIOUS bar's regime state,
+    # which is a pure function of the bars — re-targets off the bear book.
+    engines = [("main", agent.eng)]
+    if agent.eng_bear is not None:
+        engines.append(("bear", agent.eng_bear))
+    for tag, eng in engines:
+        if eng.is_model:
+            rows = [r for r in (fit_audit or [])
+                    if r.get("engine", "main") == tag]
+            last_fit = _last_fit_step(rows, market, i0)
+            if last_fit is None or step - last_fit >= eng.sig.refit_days:
+                refit = bool(eng.fit(t, fit_audit, None, tag))
+                out["refitted"] = out["refitted"] or refit
 
-    if step % genome.portfolio.rebalance_days == 0:
+    bear_now = agent.eng_bear is not None and agent._regime_off(t)      # noqa: SLF001
+    last_bear = (agent.eng_bear is not None and t - 1 >= i0
+                 and agent._regime_off(t - 1))                          # noqa: SLF001
+    if step % genome.portfolio.rebalance_days == 0 or bear_now != last_bear:
+        eng = agent.eng_bear if bear_now else agent.eng
         tradable = np.isfinite(market.close[t]) & (market.close[t] > 0.0)
         agent._target_w = agent._targets(                               # noqa: SLF001
-            t, agent._scores(t, tradable), tradable)                    # noqa: SLF001
+            t, eng.scores(t, tradable), tradable)
         out["rebalanced"] = True
 
     hit = agent._stopped(t, shares)                                     # noqa: SLF001
@@ -418,6 +434,8 @@ def live_decision(agent, market, shares, equity, peak_equity, i0: int, fit_audit
     scale, why = agent._overlay_scale(t, equity / peak_equity - 1.0)    # noqa: SLF001
 
     causes = (["stop"] if hit.any() else [])
+    if bear_now != last_bear:
+        causes.append("regime_switch")
     if why is not None:
         causes.append(why)
     out["target_w"] = agent._target_w * scale                           # noqa: SLF001

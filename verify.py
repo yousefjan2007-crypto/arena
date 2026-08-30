@@ -88,6 +88,7 @@ GitHub runner, and after a bad yfinance day.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import shutil
@@ -247,11 +248,12 @@ def NAIVE_EVALUATOR_ic(agent) -> float:
     memorised its own test set comes back looking brilliant.
     """
     family = agent.genome.signal.family
-    y_mat = agent._y if family == "ridge" else agent._y_class       # noqa: SLF001
-    X = agent._X.reshape(-1, agent._X.shape[2])                     # noqa: SLF001
-    realized = agent._y.reshape(-1)                                 # noqa: SLF001
+    eng = agent.eng                                     # the main book's engine
+    y_mat = eng._y if family == "ridge" else eng._y_class           # noqa: SLF001
+    X = eng._X.reshape(-1, eng._X.shape[2])                         # noqa: SLF001
+    realized = eng._y.reshape(-1)                                   # noqa: SLF001
     rows = np.flatnonzero(np.isfinite(realized) & np.isfinite(X).any(axis=1))
-    model = agent._pipeline()                                       # noqa: SLF001
+    model = eng._pipeline()                                         # noqa: SLF001
     Xr = np.asarray(X[rows], dtype=np.float64)
     model.fit(Xr, y_mat.reshape(-1)[rows])
     return float(np.corrcoef(_predict(model, family, Xr), realized[rows])[0, 1])
@@ -269,19 +271,20 @@ def arena_streaming_ic(agent, market) -> dict:
     (the quant-standard IC, and the one that is not dominated by a handful of
     volatile dates), and the count behind them.
     """
-    agent._model = None                                             # noqa: SLF001
+    eng = agent.eng                                     # the main book's engine
+    eng._model = None                                               # noqa: SLF001
     refit = agent.genome.signal.refit_days
     h = agent.genome.signal.horizon
-    fwd = agent._y                                                  # noqa: SLF001
+    fwd = eng._y                                                    # noqa: SLF001
     last_fit, first, preds, realz = None, None, [], []
     for t in range(len(market.dates)):
         if last_fit is None or t - last_fit >= refit:
-            if agent._fit(t, None):                                 # noqa: SLF001
+            if eng.fit(t, None):
                 last_fit, first = t, (first if first is not None else t)
-        if agent._model is None or t >= len(market.dates) - h:      # noqa: SLF001
+        if eng._model is None or t >= len(market.dates) - h:        # noqa: SLF001
             continue
         tradable = np.isfinite(market.close[t]) & (market.close[t] > 0.0)
-        s = agent._scores(t, tradable)                              # noqa: SLF001
+        s = eng.scores(t, tradable)
         keep = np.isfinite(s) & np.isfinite(fwd[t])
         preds.append(s[keep])
         realz.append(fwd[t][keep])
@@ -368,7 +371,7 @@ def test_planted_leak():
     stream = arena_streaming_ic(agent, market)
     res = evaluate.full_eval(genome, market)
     coef = dict(zip(genome.signal.features,
-                    agent._model.named_steps["clf"].coef_))        # noqa: SLF001
+                    agent.eng._model.named_steps["clf"].coef_))    # noqa: SLF001
 
     check("(a) naive evaluator is fooled by the planted future", naive_ic > 0.30,
           "pooled in-sample IC = %.4f on a market with no true edge" % naive_ic)
@@ -481,7 +484,38 @@ DET_CONFIG = {
                     ("2001-11-01", "2002-04-30")],
     "VAULT_START": "2002-07-01",
     "WF_MIN_TRAIN_DAYS": 80,
+    # Keep this test at its designed scale: POP_TARGET would breed the 8-genome
+    # seed up to 64 and blow the one-genome-per-run leg past DET_MAX_RUNS.
+    # Determinism OF the growth path is proved by test_evolution_diversity's
+    # pair-run; this test proves the evaluation machinery byte-for-byte.
+    "POP_TARGET": DET_POP,
 }
+
+# Frozen BEFORE the adaptive-gene fields were added: these dicts predate
+# train_window/signal_bear, and their hashes are on the trial ledger. If any new
+# field leaks into canonical_json at its default value, these break — and so does
+# the identity of every genome the arena has ever evaluated. Captured from
+# state/population.json at generation 31, 2026-08-30.
+HASH_FIXTURES = (
+    ({"portfolio": {"gross": 1.0, "n_long": 11, "n_short": 0, "rebalance_days": 21,
+                    "vol_target": None, "weighting": "score"},
+      "risk": {"dd_limit": None, "regime_filter": "spy_200dma", "regime_scale": 0.0,
+               "stop_loss": 0.1, "trail_stop": 0.2},
+      "signal": {"family": "seasonal_rule", "features": [], "horizon": 21,
+                 "params": {}, "refit_days": 63}}, "9fa82dc74340"),
+    ({"portfolio": {"gross": 1.0, "n_long": 11, "n_short": 0, "rebalance_days": 21,
+                    "vol_target": None, "weighting": "score"},
+      "risk": {"dd_limit": None, "regime_filter": "spy_200dma", "regime_scale": 0.0,
+               "stop_loss": 0.1, "trail_stop": 0.2},
+      "signal": {"family": "seasonal_rule", "features": [], "horizon": 21,
+                 "params": {}, "refit_days": 126}}, "c17f77b7d09d"),
+    ({"portfolio": {"gross": 0.8, "n_long": 11, "n_short": 0, "rebalance_days": 21,
+                    "vol_target": None, "weighting": "score"},
+      "risk": {"dd_limit": None, "regime_filter": "spy_200dma", "regime_scale": 0.0,
+               "stop_loss": 0.1, "trail_stop": 0.2},
+      "signal": {"family": "seasonal_rule", "features": [], "horizon": 21,
+                 "params": {}, "refit_days": 126}}, "14574361d767"),
+)
 
 
 def determinism_market():
@@ -682,6 +716,26 @@ def test_determinism():
         check("no checkpoint directory survives a completed generation",
               not glob.glob(os.path.join(dirs[2], "tmp_gen_*")),
               "state/tmp_gen_* removed once the population advanced")
+
+        # ── the two-book leg ──────────────────────────────────────────────────
+        # A signal_bear genome runs both engines on their own cadences, audits
+        # each under its engine tag, and stays byte-deterministic. Both signals
+        # are models here so BOTH audit (a rule main would audit nothing).
+        feats = tuple(sorted(market.feature_names))[:3]
+        bear_g = gn.Genome(
+            signal=gn.SignalGene("ridge", 10, 63, feats, (("alpha", 1.0),)),
+            portfolio=gn.PortfolioGene(3, 0, "equal", 1.0, None, 5),
+            risk=gn.RiskGene(None, None, "spy_200dma", 0.0, None),
+            signal_bear=gn.SignalGene("ridge", 21, 126, feats, (("alpha", 10.0),)))
+        aud1, aud2 = [], []
+        r1 = StrategyAgent(bear_g, market).run_episode(fit_audit=aud1)
+        r2 = StrategyAgent(bear_g, market).run_episode(fit_audit=aud2)
+        engines = {row.get("engine") for row in aud1}
+        check("a two-book genome audits both engines", engines == {"main", "bear"},
+              "engines seen: %s over %d fits" % (sorted(str(e) for e in engines),
+                                                 len(aud1)))
+        check("two-book episode is byte-deterministic",
+              r1["daily_net"].tobytes() == r2["daily_net"].tobytes(), "")
     finally:
         for k, v in saved_cfg.items():
             setattr(config, k, v)
@@ -958,6 +1012,38 @@ def test_streaming_purge():
                  max(r["n_rows"] for r in audit)))
         check("%-8s an audit row exists for every refit" % family, spaced and complete,
               "fits at bars %s of %d, cadence %d" % (bars, n_bars, cadence))
+
+    # train_window: same ridge spec, but refits may only use the trailing 504
+    # trading days of labels. The purge gap is untouched; the span from each
+    # fit back to the OLDEST row it trained on is bounded by the window (plus
+    # the purge distance), where the expanding default reaches back to bar 0.
+    base = _genome("ridge", 21, market.feature_names, (("alpha", 1.0),), rebalance=5)
+    gtw = gn.Genome(signal=gn.SignalGene(family="ridge", horizon=21,
+                                         refit_days=base.signal.refit_days,
+                                         features=base.signal.features,
+                                         params=(("alpha", 1.0),), train_window=504),
+                    portfolio=base.portfolio, risk=base.risk)
+    audit_tw: list = []
+    StrategyAgent(gtw, market).run_episode(fit_audit=audit_tw)
+    bound = 504 + config.WF_EMBARGO_DAYS + gtw.signal.horizon
+    spans, gaps = [], []
+    for row in audit_tw:
+        fb = int(market.dates.searchsorted(row["fit_date"]))
+        spans.append(fb - int(market.dates.searchsorted(row["min_t_used"])))
+        gaps.append(fb - int(market.dates.searchsorted(row["max_t1_used"])))
+    check("train_window bounds the training span",
+          bool(spans) and all(s <= bound for s in spans),
+          "worst span %d bars vs bound %d over %d refits"
+          % (max(spans) if spans else -1, bound, len(spans)))
+    check("train_window keeps the purge gap",
+          bool(gaps) and min(gaps) >= config.WF_EMBARGO_DAYS,
+          "tightest gap %d bars" % (min(gaps) if gaps else -1))
+    check("train_window bounds n_rows",
+          all(r["n_rows"] <= 504 * len(market.symbols) for r in audit_tw), "")
+    check("...and the window actually binds vs expanding",
+          any(s == bound for s in spans) or (spans and max(spans) < 1600),
+          "the last refit of a 1600-bar episode reaches back %d bars, not to bar 0"
+          % (max(spans) if spans else -1))
 
     # Rule families fit nothing, so they must not produce audit rows at all.
     rule = gn.Genome(signal=gn.SignalGene("mom_rule", 21, 252, (),
@@ -1722,7 +1808,7 @@ def test_trial_ledger():
               % (len(shadowed), ", ".join(shadowed), len(covered), config.config_hash()))
 
         # The returns matrix refuses to store anything the vault owns.
-        dates = pd.bdate_range("2019-11-01", periods=60)             # crosses 2020-01-01
+        dates = pd.bdate_range("2022-11-01", periods=60)             # crosses 2023-01-01
         bad = {genomes[0].hash(): {"dates": dates,
                                    "daily_net": np.zeros(60), "daily_gross": np.zeros(60),
                                    "turnover": np.zeros(60), "costs": np.zeros(60)}}
@@ -1954,6 +2040,50 @@ def test_genome_ops():
     fixed = gn._repair(wrecked, lib)                # noqa: SLF001 — the repair IS the test
     check("repair drags an out-of-spec genome back inside BOUNDS",
           not _violations(fixed, lib), "; ".join(_violations(fixed, lib)) or fixed.describe())
+
+    # Identity continuity: dicts frozen before any adaptive gene existed must
+    # keep their hashes and their exact canonical bytes (see HASH_FIXTURES).
+    for gd, expect in HASH_FIXTURES:
+        g = gn.from_dict(gd)
+        check("frozen hash %s stable" % expect, g.hash() == expect,
+              "got %s" % g.hash())
+        check("frozen dict round-trips byte-identically",
+              gn.canonical_json(g) == json.dumps(gd, sort_keys=True,
+                                                 separators=(",", ":")), expect)
+
+    # train_window: omitted at default, round-trips when set, moves the hash.
+    tw = gn.BOUNDS["train_window"]
+    check("train_window grid", tw == (None, 504, 1260, 2520), str(tw))
+    g0 = gn.from_dict(HASH_FIXTURES[0][0])
+    check("default train_window omitted from json",
+          "train_window" not in gn.canonical_json(g0), "")
+    g1 = gn.Genome(signal=gn.SignalGene(family="ridge", horizon=10, refit_days=63,
+                                        features=("rsi", "rs_spy", "rv21"),
+                                        params=(("alpha", 1.0),), train_window=504),
+                   portfolio=g0.portfolio, risk=g0.risk)
+    check("non-default train_window round-trips",
+          gn.from_dict(g1.to_dict()).signal.train_window == 504, "")
+    check("non-default changes the hash", g1.hash() != gn._repair(
+          gn.Genome(signal=gn.SignalGene(family="ridge", horizon=10, refit_days=63,
+                                         features=("rsi", "rs_spy", "rv21"),
+                                         params=(("alpha", 1.0),)),
+                    portfolio=g0.portfolio, risk=g0.risk)).hash(), "")
+
+    # signal_bear: omitted at default, round-trips, moves the hash, and cannot
+    # exist without a regime detector to switch on.
+    base = gn.from_dict(HASH_FIXTURES[0][0])          # has regime_filter=spy_200dma
+    bear = gn.SignalGene(family="mom_rule", horizon=21, refit_days=126,
+                         params=(("lookback", 63), ("skip", 21)))
+    gb = gn._repair(gn.Genome(signal=base.signal, portfolio=base.portfolio,
+                              risk=base.risk, signal_bear=bear))
+    check("signal_bear round-trips", gn.from_dict(gb.to_dict()).signal_bear is not None, "")
+    check("signal_bear changes the hash", gb.hash() != base.hash(), "")
+    check("default signal_bear omitted from json",
+          "signal_bear" not in gn.canonical_json(base), "")
+    no_filter = gn._repair(gn.Genome(signal=base.signal, portfolio=base.portfolio,
+        risk=gn.RiskGene(stop_loss=None, trail_stop=None, regime_filter=None,
+                         regime_scale=0.0, dd_limit=None), signal_bear=bear))
+    check("repair nulls a bear book with no detector", no_filter.signal_bear is None, "")
 
 
 # ── 10. no wall-clock in compute paths ─────────────────────────────────────────
@@ -2396,6 +2526,99 @@ def test_paper_stage():
           "replayed $%.2f vs episode $%.2f" % last)
 
 
+def test_evolution_diversity():
+    """Task 1: the population grows to POP_TARGET, no family may exceed
+    FAMILY_MAX_FRAC of it, and immigrants are stratified across families —
+    all of it a pure function of (population, scores, generation)."""
+    print("\n[diversity] family cap, population target, stratification")
+    import evolution as ev
+    import genome as gn
+    DEMO = ("bb_z", "credit_mom21", "ema50_200", "mom_12_1", "mom_21", "mom_63",
+            "mom_126", "px_ema200", "rev_5", "rsi", "rs_spy", "rv21", "seasonality",
+            "us10y", "vix_pct", "vol_regime", "xs_mom_63", "xs_rs_spy")
+    # A 12-genome monoculture: every entry the same family, mirroring gen 28.
+    seed = []
+    for i in range(12):
+        rng = gn.child_rng(config.SEED, 0, "divtest", i)
+        g = gn.random_genome(rng, DEMO, family="seasonal_rule")
+        seed.append(ev.make_entry(g, "seed", "", 0))
+    scores = {e["hash"]: (int(e["hash"][:6], 16) % 1000) / 500.0 - 1.0 for e in seed}
+
+    a = ev.next_generation(seed, scores, 5, DEMO)
+    b = ev.next_generation(seed, scores, 5, DEMO)
+    check("grows to POP_TARGET", len(a) == config.POP_TARGET,
+          "%d slots (target %d)" % (len(a), config.POP_TARGET))
+    check("deterministic pair-run", [e["hash"] for e in a] == [e["hash"] for e in b], "")
+
+    import math
+    cap = int(math.ceil(config.FAMILY_MAX_FRAC * len(a)))
+    fams = {}
+    for e in a:
+        fam = e["genome"]["signal"]["family"]
+        fams[fam] = fams.get(fam, 0) + 1
+    worst = max(fams.items(), key=lambda kv: kv[1])
+    check("family cap holds", worst[1] <= cap,
+          "%s holds %d of %d (cap %d)" % (worst[0], worst[1], len(a), cap))
+    check("all six families present", len(fams) == len(gn.BOUNDS["families"]),
+          ", ".join(sorted(fams)))
+    check("forced-family draw honours family",
+          gn.random_genome(gn.child_rng(config.SEED, 0, "ff", 0), DEMO,
+                           family="hgb").signal.family == "hgb", "")
+
+
+def test_robust_fitness():
+    print("\n[fitness] the quantile score punishes one-regime wonders")
+    import evaluate as ev
+    rng = np.random.default_rng(config.SEED)
+    n = 5040                                            # ~20y of days
+    dates = pd.date_range("1999-01-04", periods=n, freq="B")
+    steady = rng.normal(0.0004, 0.01, n)                # decent everywhere
+    lumpy = np.concatenate([rng.normal(0.0016, 0.01, n // 4),   # one golden era
+                            rng.normal(-0.0001, 0.01, n - n // 4)])
+    s_steady = ev.robust_score(steady, dates, 0)
+    s_lumpy = ev.robust_score(lumpy, dates, 0)
+    check("robust score exists and is finite", np.isfinite(s_steady), "%.3f" % s_steady)
+    check("steady beats lumpy despite similar full-span Sharpe",
+          s_steady > s_lumpy,
+          "steady %.3f vs lumpy %.3f (full-span %.3f vs %.3f)"
+          % (s_steady, s_lumpy, ev.sharpe(steady), ev.sharpe(lumpy)))
+    short = rng.normal(0.0004, 0.01, 300)
+    check("short series falls back to plain sharpe",
+          np.isclose(ev.robust_score(short, dates[:300], 0), ev.sharpe(short)), "")
+
+
+def test_regime_features():
+    print("\n[features] regime columns are trailing-only and per-date")
+    import features as ft
+    market = synthetic_market(n_days=520, n_syms=12, seed=7)
+    cols = ft._arena_columns(market)                                # noqa: SLF001
+    check("three columns", sorted(cols) == ["mkt_breadth_200", "mkt_vol_ratio",
+                                            "xs_disp_63"], ", ".join(sorted(cols)))
+    for name, arr in cols.items():
+        check("%s shape" % name, arr.shape == (len(market.dates), len(market.symbols)),
+              str(arr.shape))
+        finite_rows = np.isfinite(arr).any(axis=1)
+        check("%s has finite values after warm-up" % name, bool(finite_rows.any()),
+              "%d of %d rows finite" % (int(finite_rows.sum()), len(market.dates)))
+        # max == min per row, EXACT: nanstd would accumulate float32 noise on
+        # values that are byte-identical.
+        check("%s per-date broadcast" % name,
+              bool(np.all(np.nanmax(arr[finite_rows], axis=1)
+                          == np.nanmin(arr[finite_rows], axis=1))), "")
+    # Point-in-time: truncating the bars must not change earlier values, and a
+    # date must not become finite only because later bars arrived.
+    cut = len(market.dates) - 40
+    full = ft._arena_columns_from_bars(market.close, market.volume)  # noqa: SLF001
+    trimmed = ft._arena_columns_from_bars(market.close[:cut],        # noqa: SLF001
+                                          market.volume[:cut])
+    for name in full:
+        a, b = full[name][:cut, 0], trimmed[name][:, 0]
+        both = np.isfinite(a) & np.isfinite(b)
+        check("%s is point-in-time" % name,
+              bool(np.allclose(a[both], b[both]))
+              and bool((np.isfinite(a) == np.isfinite(b)).all()), "")
+
+
 def main() -> int:
     test_planted_leak()
     test_determinism()
@@ -2406,8 +2629,11 @@ def main() -> int:
     test_gates()
     test_trial_ledger()
     test_genome_ops()
+    test_evolution_diversity()
     test_no_wallclock()
     test_pbo_sanity()
+    test_robust_fitness()
+    test_regime_features()
     test_paper_stage()
     print("\nVERIFY:", "ALL PASS" if ok else "FAILURES PRESENT")
     return 0 if ok else 1

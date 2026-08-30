@@ -24,10 +24,13 @@ run_deepeval.py       weekly: re-simulate every party fresh -> the F2 battery ->
 ```
 
 A **genome** is a whole strategy: a signal (momentum / mean-reversion /
-seasonal rule, or ridge / logistic / gradient-boosting model), a portfolio
-construction (how many longs and shorts, weighting, gross exposure, vol target,
-rebalance cadence) and a risk overlay (stops, trailing stops, regime filter,
-drawdown limit). Its sha256 is its identity, and every evaluation of it — at any
+seasonal rule, or ridge / logistic / gradient-boosting model — model signals may
+also carry a `train_window`, learning only from the trailing 2/5/10 years
+instead of all history), a portfolio construction (how many longs and shorts,
+weighting, gross exposure, vol target, rebalance cadence), a risk overlay
+(stops, trailing stops, regime filter, drawdown limit), and optionally a second
+**bear-regime signal** (`signal_bear`) scored instead of the first while the
+regime filter reads risk-off — one strategy, two books. Its sha256 is its identity, and every evaluation of it — at any
 fidelity, ever — is appended to a trial ledger that nothing may rewrite — with one
 bounded exception: `ledger.dedup_ledger` removes byte-identical merge artifacts
 (a row a union merge appended twice, a header line it carried into the middle of
@@ -48,11 +51,15 @@ is "the backtest is beautiful and the money is gone". Five defenses, each aimed
 at a specific way that happens:
 
 **The vault.** All fitness and selection uses out-of-sample days *before
-2020-01-01 only*. Everything from 2020 onward is touched exclusively by the
+`config.VAULT_START` only* — currently **2023-01-01**, moved deliberately from
+2020-01-01 on 2026-08-30 (selection had been frozen at 2019 while the market
+kept moving; the released 2020–2022 span had been shown to exactly 4 logged gate
+evaluations). Everything from the boundary onward is touched exclusively by the
 weekly promotion gates, and every single access is counted in
-`state/vault_access.csv`. Selection therefore cannot overfit the recent six
-years, because it has never seen them. Asking twice is two looks, and the second
-look is deflated by the first.
+`state/vault_access.csv`. Selection therefore cannot overfit the untouched
+recent years, because it has never seen them. Asking twice is two looks, and the
+second look is deflated by the first. The boundary is revisited annually, by
+hand, in `config.py`.
 
 **The trial ledger is the DSR input.** A Deflated Sharpe Ratio corrects a
 Sharpe for how many strategies you tried before finding it — so it is only as
