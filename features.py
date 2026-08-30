@@ -61,6 +61,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import warnings
 
 import joblib
 import numpy as np
@@ -162,6 +163,57 @@ def _to_grid(panel: pd.DataFrame, market) -> tuple:
     return names, grid
 
 
+def _arena_columns_from_bars(close, volume) -> dict:
+    """Three market-regime columns from the bars alone — trailing windows only.
+    Each is one value per date broadcast across symbols, like the macro columns:
+    no cross-sectional information, exactly what a regime-conditional model needs.
+    (Nothing here reaches forward: every window trails its own date, and the
+    leak scan in verify.py holds this function to account.)
+
+      mkt_breadth_200   fraction of the universe above its own 200-bar mean
+      xs_disp_63        cross-sectional std of trailing 63-bar returns
+      mkt_vol_ratio     21-bar realized vol of the equal-weight universe return
+                        over its trailing 252-bar median
+    """
+    n_dates, n_syms = close.shape
+    c = np.asarray(close, dtype=np.float64)
+
+    ma200 = np.full_like(c, np.nan)
+    for j in range(n_syms):                           # pandas rolling per column
+        ma200[:, j] = pd.Series(c[:, j]).rolling(200, min_periods=200).mean().to_numpy()
+    with np.errstate(invalid="ignore"):
+        above = c > ma200
+    known = np.isfinite(c) & np.isfinite(ma200)
+    n_known = known.sum(axis=1)
+    breadth = np.where(n_known >= max(10, n_syms // 10),
+                       (above & known).sum(axis=1) / np.maximum(n_known, 1), np.nan)
+
+    disp = np.full(n_dates, np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r63 = c[63:] / c[:-63] - 1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)   # all-NaN early rows
+        disp[63:] = np.nanstd(np.where(np.isfinite(r63), r63, np.nan), axis=1)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r1 = np.diff(np.log(c), axis=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        ew = np.nanmean(np.where(np.isfinite(r1), r1, np.nan), axis=1)
+    ew_s = pd.Series(np.concatenate([[np.nan], ew]))
+    rv21 = ew_s.rolling(21, min_periods=21).std()
+    ratio = (rv21 / rv21.rolling(252, min_periods=252).median()).to_numpy()
+
+    def spread(vec):
+        return np.repeat(np.asarray(vec, dtype=np.float32)[:, None], n_syms, axis=1)
+    return {"mkt_breadth_200": spread(breadth), "xs_disp_63": spread(disp),
+            "mkt_vol_ratio": spread(ratio)}
+
+
+def _arena_columns(market) -> dict:
+    return _arena_columns_from_bars(market.close, market.volume)
+
+
 def panel_hash(data_hash: str, names, grid) -> str:
     """Content digest of the data AND the features built from it — see the module
     docstring: this, not data_hash, is what gate G1 compares.
@@ -198,6 +250,9 @@ def recompute_panel_hash(market, asof=None) -> tuple:
         panel = _sl_features.build_panel(_history(market.symbols), _meta(market.symbols),
                                          asof=asof)
     names, grid = _to_grid(panel, market)
+    extra = _arena_columns(market)               # must mirror build_features exactly
+    grid.update(extra)
+    names = tuple(sorted(set(names) | set(extra)))
     return names, grid, panel_hash(market.data_hash, names, grid)
 
 
@@ -239,6 +294,9 @@ def build_features(market, asof=None) -> None:
             hist = _history(market.symbols)
             panel = _sl_features.build_panel(hist, _meta(list(hist)), asof=asof)
         names, grid = _to_grid(panel, market)
+        extra = _arena_columns(market)           # must mirror recompute_panel_hash
+        grid.update(extra)
+        names = tuple(sorted(set(names) | set(extra)))
         payload = {"feature_names": names, "grid": grid, "symbols": list(market.symbols),
                    "n_dates": len(market.dates), "data_hash": market.data_hash,
                    "asof": asof}

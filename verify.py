@@ -2587,6 +2587,38 @@ def test_robust_fitness():
           np.isclose(ev.robust_score(short, dates[:300], 0), ev.sharpe(short)), "")
 
 
+def test_regime_features():
+    print("\n[features] regime columns are trailing-only and per-date")
+    import features as ft
+    market = synthetic_market(n_days=520, n_syms=12, seed=7)
+    cols = ft._arena_columns(market)                                # noqa: SLF001
+    check("three columns", sorted(cols) == ["mkt_breadth_200", "mkt_vol_ratio",
+                                            "xs_disp_63"], ", ".join(sorted(cols)))
+    for name, arr in cols.items():
+        check("%s shape" % name, arr.shape == (len(market.dates), len(market.symbols)),
+              str(arr.shape))
+        finite_rows = np.isfinite(arr).any(axis=1)
+        check("%s has finite values after warm-up" % name, bool(finite_rows.any()),
+              "%d of %d rows finite" % (int(finite_rows.sum()), len(market.dates)))
+        # max == min per row, EXACT: nanstd would accumulate float32 noise on
+        # values that are byte-identical.
+        check("%s per-date broadcast" % name,
+              bool(np.all(np.nanmax(arr[finite_rows], axis=1)
+                          == np.nanmin(arr[finite_rows], axis=1))), "")
+    # Point-in-time: truncating the bars must not change earlier values, and a
+    # date must not become finite only because later bars arrived.
+    cut = len(market.dates) - 40
+    full = ft._arena_columns_from_bars(market.close, market.volume)  # noqa: SLF001
+    trimmed = ft._arena_columns_from_bars(market.close[:cut],        # noqa: SLF001
+                                          market.volume[:cut])
+    for name in full:
+        a, b = full[name][:cut, 0], trimmed[name][:, 0]
+        both = np.isfinite(a) & np.isfinite(b)
+        check("%s is point-in-time" % name,
+              bool(np.allclose(a[both], b[both]))
+              and bool((np.isfinite(a) == np.isfinite(b)).all()), "")
+
+
 def main() -> int:
     test_planted_leak()
     test_determinism()
@@ -2601,6 +2633,7 @@ def main() -> int:
     test_no_wallclock()
     test_pbo_sanity()
     test_robust_fitness()
+    test_regime_features()
     test_paper_stage()
     print("\nVERIFY:", "ALL PASS" if ok else "FAILURES PRESENT")
     return 0 if ok else 1
