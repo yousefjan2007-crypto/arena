@@ -991,6 +991,38 @@ def test_streaming_purge():
         check("%-8s an audit row exists for every refit" % family, spaced and complete,
               "fits at bars %s of %d, cadence %d" % (bars, n_bars, cadence))
 
+    # train_window: same ridge spec, but refits may only use the trailing 504
+    # trading days of labels. The purge gap is untouched; the span from each
+    # fit back to the OLDEST row it trained on is bounded by the window (plus
+    # the purge distance), where the expanding default reaches back to bar 0.
+    base = _genome("ridge", 21, market.feature_names, (("alpha", 1.0),), rebalance=5)
+    gtw = gn.Genome(signal=gn.SignalGene(family="ridge", horizon=21,
+                                         refit_days=base.signal.refit_days,
+                                         features=base.signal.features,
+                                         params=(("alpha", 1.0),), train_window=504),
+                    portfolio=base.portfolio, risk=base.risk)
+    audit_tw: list = []
+    StrategyAgent(gtw, market).run_episode(fit_audit=audit_tw)
+    bound = 504 + config.WF_EMBARGO_DAYS + gtw.signal.horizon
+    spans, gaps = [], []
+    for row in audit_tw:
+        fb = int(market.dates.searchsorted(row["fit_date"]))
+        spans.append(fb - int(market.dates.searchsorted(row["min_t_used"])))
+        gaps.append(fb - int(market.dates.searchsorted(row["max_t1_used"])))
+    check("train_window bounds the training span",
+          bool(spans) and all(s <= bound for s in spans),
+          "worst span %d bars vs bound %d over %d refits"
+          % (max(spans) if spans else -1, bound, len(spans)))
+    check("train_window keeps the purge gap",
+          bool(gaps) and min(gaps) >= config.WF_EMBARGO_DAYS,
+          "tightest gap %d bars" % (min(gaps) if gaps else -1))
+    check("train_window bounds n_rows",
+          all(r["n_rows"] <= 504 * len(market.symbols) for r in audit_tw), "")
+    check("...and the window actually binds vs expanding",
+          any(s == bound for s in spans) or (spans and max(spans) < 1600),
+          "the last refit of a 1600-bar episode reaches back %d bars, not to bar 0"
+          % (max(spans) if spans else -1))
+
     # Rule families fit nothing, so they must not produce audit rows at all.
     rule = gn.Genome(signal=gn.SignalGene("mom_rule", 21, 252, (),
                                           (("lookback", 63), ("skip", 5))),
@@ -1996,6 +2028,24 @@ def test_genome_ops():
         check("frozen dict round-trips byte-identically",
               gn.canonical_json(g) == json.dumps(gd, sort_keys=True,
                                                  separators=(",", ":")), expect)
+
+    # train_window: omitted at default, round-trips when set, moves the hash.
+    tw = gn.BOUNDS["train_window"]
+    check("train_window grid", tw == (None, 504, 1260, 2520), str(tw))
+    g0 = gn.from_dict(HASH_FIXTURES[0][0])
+    check("default train_window omitted from json",
+          "train_window" not in gn.canonical_json(g0), "")
+    g1 = gn.Genome(signal=gn.SignalGene(family="ridge", horizon=10, refit_days=63,
+                                        features=("rsi", "rs_spy", "rv21"),
+                                        params=(("alpha", 1.0),), train_window=504),
+                   portfolio=g0.portfolio, risk=g0.risk)
+    check("non-default train_window round-trips",
+          gn.from_dict(g1.to_dict()).signal.train_window == 504, "")
+    check("non-default changes the hash", g1.hash() != gn._repair(
+          gn.Genome(signal=gn.SignalGene(family="ridge", horizon=10, refit_days=63,
+                                         features=("rsi", "rs_spy", "rv21"),
+                                         params=(("alpha", 1.0),)),
+                    portfolio=g0.portfolio, risk=g0.risk)).hash(), "")
 
 
 # ── 10. no wall-clock in compute paths ─────────────────────────────────────────

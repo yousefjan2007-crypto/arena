@@ -57,6 +57,11 @@ BOUNDS = {
     "model_families": ("ridge", "logistic", "hgb"),
     "horizon": (5, 10, 21, 63),                  # trading days the signal predicts
     "refit_days": (63, 126, 252),                # walk-forward refit cadence
+    # Trailing trading days of labels a refit may use. None = expanding from bar 0
+    # (the only behavior before this gene existed — and its serialized default, so
+    # pre-gene genomes keep their hashes). A windowed model learns the CURRENT
+    # regime at the price of sample size; evolution decides the trade per genome.
+    "train_window": (None, 504, 1260, 2520),
     "n_features": (3, 15),                       # inclusive, model families only
     "min_positions": 3,                          # n_long + n_short floor
     # Family parameter grids. Names are the sklearn kwargs for the model families,
@@ -101,6 +106,7 @@ class SignalGene:
     refit_days: int
     features: tuple = ()
     params: tuple = ()
+    train_window: object = None     # None = expanding; model families only
 
     @property
     def pdict(self) -> dict:
@@ -165,13 +171,32 @@ class Genome:
 
 
 # ── canonical encoding ─────────────────────────────────────────────────────────
+def _signal_to_dict(sg: SignalGene) -> dict:
+    """One signal block. New optional genes are OMITTED at their default value so
+    a genome that does not use them keeps its pre-gene hash (see the module
+    docstring and verify.py HASH_FIXTURES)."""
+    out = {"family": sg.family, "horizon": sg.horizon,
+           "refit_days": sg.refit_days,
+           "features": list(sg.features),
+           "params": dict(sg.params)}
+    if sg.train_window is not None:              # omit-default: hash back-compat
+        out["train_window"] = sg.train_window
+    return out
+
+
+def _signal_from_dict(s: dict) -> SignalGene:
+    return SignalGene(family=s["family"], horizon=int(s["horizon"]),
+                      refit_days=int(s["refit_days"]),
+                      features=tuple(s["features"]),
+                      params=tuple(sorted(s["params"].items())),
+                      train_window=(int(s["train_window"])
+                                    if s.get("train_window") is not None else None))
+
+
 def to_dict(g: Genome) -> dict:
     """Plain JSON-able types only: tuples become lists, params become a mapping."""
     return {
-        "signal": {"family": g.signal.family, "horizon": g.signal.horizon,
-                   "refit_days": g.signal.refit_days,
-                   "features": list(g.signal.features),
-                   "params": dict(g.signal.params)},
+        "signal": _signal_to_dict(g.signal),
         "portfolio": {"n_long": g.portfolio.n_long, "n_short": g.portfolio.n_short,
                       "weighting": g.portfolio.weighting, "gross": g.portfolio.gross,
                       "vol_target": g.portfolio.vol_target,
@@ -183,12 +208,9 @@ def to_dict(g: Genome) -> dict:
 
 
 def from_dict(d: dict) -> Genome:
-    s, p, r = d["signal"], d["portfolio"], d["risk"]
+    p, r = d["portfolio"], d["risk"]
     return Genome(
-        signal=SignalGene(family=s["family"], horizon=int(s["horizon"]),
-                          refit_days=int(s["refit_days"]),
-                          features=tuple(s["features"]),
-                          params=tuple(sorted(s["params"].items()))),
+        signal=_signal_from_dict(d["signal"]),
         portfolio=PortfolioGene(n_long=int(p["n_long"]), n_short=int(p["n_short"]),
                                 weighting=p["weighting"], gross=p["gross"],
                                 vol_target=p["vol_target"],
@@ -258,7 +280,11 @@ def _repair(g: Genome, feature_names=None) -> Genome:
                         horizon=_snap(s.horizon, BOUNDS["horizon"]),
                         refit_days=_snap(s.refit_days, BOUNDS["refit_days"]),
                         features=_repair_features(family, s.features, feature_names),
-                        params=tuple(sorted(params.items())))
+                        params=tuple(sorted(params.items())),
+                        # Rules never fit: the gene is forced clean rather than
+                        # inert (unlike regime_scale, nothing forces it to exist).
+                        train_window=(_snap(s.train_window, BOUNDS["train_window"])
+                                      if family in BOUNDS["model_families"] else None))
 
     pg = BOUNDS["portfolio"]
     n_long = int(np.clip(p.n_long, pg["n_long"][0], pg["n_long"][-1]))
@@ -307,7 +333,9 @@ def _random_signal(rng, feature_names, family=None):
                       horizon=_pick(rng, BOUNDS["horizon"]),
                       refit_days=_pick(rng, BOUNDS["refit_days"]),
                       features=_random_features(rng, family, feature_names),
-                      params=_random_params(rng, family))
+                      params=_random_params(rng, family),
+                      train_window=(_pick(rng, BOUNDS["train_window"])
+                                    if family in BOUNDS["model_families"] else None))
 
 
 def _random_portfolio(rng):
@@ -338,6 +366,8 @@ def _tunables(g: Genome) -> list:
     """Every single scalar a jitter could step, as (block, field, grid)."""
     out = [("signal", "horizon", BOUNDS["horizon"]),
            ("signal", "refit_days", BOUNDS["refit_days"])]
+    if g.is_model:                  # rules never fit: jittering it would be a no-op
+        out.append(("signal", "train_window", BOUNDS["train_window"]))
     for name, grid in sorted(BOUNDS["params"][g.signal.family].items()):
         out.append(("param", name, grid))
     for name, grid in sorted(BOUNDS["portfolio"].items()):

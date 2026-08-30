@@ -248,18 +248,26 @@ class StrategyAgent:
         return own & t1
 
     def _fit(self, f: int, fit_audit) -> bool:
-        """Refit at bar f on resolved, embargoed labels only. False = not yet."""
+        """Refit at bar f on resolved, embargoed labels only. False = not yet.
+
+        `train_window` (a gene) bounds how far BACK a refit may reach: None is
+        the expanding window from bar 0, an int keeps only the trailing that-many
+        label rows by date. The purge boundary is untouched either way — the
+        window trims old rows, never recent ones.
+        """
         h = self.genome.signal.horizon
         last = f - self.cfg.WF_EMBARGO_DAYS - h        # the purge boundary, in bars
         if last < 0 or last + 1 < self.cfg.WF_MIN_TRAIN_DAYS:
             return False
+        tw = self.genome.signal.train_window
+        lo = 0 if tw is None else max(0, last + 1 - int(tw))
 
         y_mat = self._y if self.genome.signal.family == "ridge" else self._y_class
-        X = self._X[:last + 1].reshape(-1, self._X.shape[2])
-        y = y_mat[:last + 1].reshape(-1)
-        labelled = np.isfinite(self._y[:last + 1]).reshape(-1)
+        X = self._X[lo:last + 1].reshape(-1, self._X.shape[2])
+        y = y_mat[lo:last + 1].reshape(-1)
+        labelled = np.isfinite(self._y[lo:last + 1]).reshape(-1)
         usable = labelled & np.isfinite(X).any(axis=1)
-        usable &= np.repeat(self._trainable_dates(last, h), self._X.shape[1])
+        usable &= np.repeat(self._trainable_dates(last, h)[lo:], self._X.shape[1])
         rows = np.flatnonzero(usable)
         if len(rows) < self.cfg.WF_MIN_TRAIN_DAYS:
             return False
@@ -271,13 +279,16 @@ class StrategyAgent:
         self._model = model
 
         if fit_audit is not None:
-            max_row = int(rows[-1] // self._X.shape[1])          # last training DATE
+            max_row = lo + int(rows[-1] // self._X.shape[1])     # last training DATE
+            min_row = lo + int(rows[0] // self._X.shape[1])      # oldest training DATE
             fit_audit.append({"fit_date": self.market.dates[f],
                               "max_t1_used": self.market.dates[max_row + h],
+                              "min_t_used": self.market.dates[min_row],
                               "n_rows": int(len(rows)),
                               "family": self.genome.signal.family,
                               "horizon": h,
                               "embargo_days": self.cfg.WF_EMBARGO_DAYS,
+                              "train_window": tw,
                               "mask_active": self._fit_mask is not None})
         return True
 
