@@ -24,10 +24,13 @@ run_deepeval.py       weekly: re-simulate every party fresh -> the F2 battery ->
 ```
 
 A **genome** is a whole strategy: a signal (momentum / mean-reversion /
-seasonal rule, or ridge / logistic / gradient-boosting model), a portfolio
-construction (how many longs and shorts, weighting, gross exposure, vol target,
-rebalance cadence) and a risk overlay (stops, trailing stops, regime filter,
-drawdown limit). Its sha256 is its identity, and every evaluation of it — at any
+seasonal rule, or ridge / logistic / gradient-boosting model — model signals may
+also carry a `train_window`, learning only from the trailing 2/5/10 years
+instead of all history), a portfolio construction (how many longs and shorts,
+weighting, gross exposure, vol target, rebalance cadence), a risk overlay
+(stops, trailing stops, regime filter, drawdown limit), and optionally a second
+**bear-regime signal** (`signal_bear`) scored instead of the first while the
+regime filter reads risk-off — one strategy, two books. Its sha256 is its identity, and every evaluation of it — at any
 fidelity, ever — is appended to a trial ledger that nothing may rewrite — with one
 bounded exception: `ledger.dedup_ledger` removes byte-identical merge artifacts
 (a row a union merge appended twice, a header line it carried into the middle of
