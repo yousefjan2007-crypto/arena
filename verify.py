@@ -88,6 +88,7 @@ GitHub runner, and after a bad yfinance day.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import shutil
@@ -487,6 +488,32 @@ DET_CONFIG = {
     # pair-run; this test proves the evaluation machinery byte-for-byte.
     "POP_TARGET": DET_POP,
 }
+
+# Frozen BEFORE the adaptive-gene fields were added: these dicts predate
+# train_window/signal_bear, and their hashes are on the trial ledger. If any new
+# field leaks into canonical_json at its default value, these break — and so does
+# the identity of every genome the arena has ever evaluated. Captured from
+# state/population.json at generation 31, 2026-08-30.
+HASH_FIXTURES = (
+    ({"portfolio": {"gross": 1.0, "n_long": 11, "n_short": 0, "rebalance_days": 21,
+                    "vol_target": None, "weighting": "score"},
+      "risk": {"dd_limit": None, "regime_filter": "spy_200dma", "regime_scale": 0.0,
+               "stop_loss": 0.1, "trail_stop": 0.2},
+      "signal": {"family": "seasonal_rule", "features": [], "horizon": 21,
+                 "params": {}, "refit_days": 63}}, "9fa82dc74340"),
+    ({"portfolio": {"gross": 1.0, "n_long": 11, "n_short": 0, "rebalance_days": 21,
+                    "vol_target": None, "weighting": "score"},
+      "risk": {"dd_limit": None, "regime_filter": "spy_200dma", "regime_scale": 0.0,
+               "stop_loss": 0.1, "trail_stop": 0.2},
+      "signal": {"family": "seasonal_rule", "features": [], "horizon": 21,
+                 "params": {}, "refit_days": 126}}, "c17f77b7d09d"),
+    ({"portfolio": {"gross": 0.8, "n_long": 11, "n_short": 0, "rebalance_days": 21,
+                    "vol_target": None, "weighting": "score"},
+      "risk": {"dd_limit": None, "regime_filter": "spy_200dma", "regime_scale": 0.0,
+               "stop_loss": 0.1, "trail_stop": 0.2},
+      "signal": {"family": "seasonal_rule", "features": [], "horizon": 21,
+                 "params": {}, "refit_days": 126}}, "14574361d767"),
+)
 
 
 def determinism_market():
@@ -1959,6 +1986,16 @@ def test_genome_ops():
     fixed = gn._repair(wrecked, lib)                # noqa: SLF001 — the repair IS the test
     check("repair drags an out-of-spec genome back inside BOUNDS",
           not _violations(fixed, lib), "; ".join(_violations(fixed, lib)) or fixed.describe())
+
+    # Identity continuity: dicts frozen before any adaptive gene existed must
+    # keep their hashes and their exact canonical bytes (see HASH_FIXTURES).
+    for gd, expect in HASH_FIXTURES:
+        g = gn.from_dict(gd)
+        check("frozen hash %s stable" % expect, g.hash() == expect,
+              "got %s" % g.hash())
+        check("frozen dict round-trips byte-identically",
+              gn.canonical_json(g) == json.dumps(gd, sort_keys=True,
+                                                 separators=(",", ":")), expect)
 
 
 # ── 10. no wall-clock in compute paths ─────────────────────────────────────────

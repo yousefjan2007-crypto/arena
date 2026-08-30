@@ -26,6 +26,9 @@ INVARIANTS held by construction and re-imposed after every operator (`_repair`):
     library — and EMPTY for the three rule families, which do not fit anything.
     Sorted because the hash must not depend on the order a subset was drawn in.
   • every param is a member of its family's grid.
+  • NEW OPTIONAL GENES ARE OMITTED from to_dict at their default value, so a
+    genome that does not use one keeps the hash it had before the gene existed
+    (verify.py HASH_FIXTURES).
 
 DETERMINISM: `child_rng(SEED, generation, parent_hash, child_idx)` derives an
 offspring's stream from a sha256 of those four values. Python's built-in hash()
