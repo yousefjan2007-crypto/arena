@@ -137,6 +137,11 @@ class Genome:
     signal: SignalGene
     portfolio: PortfolioGene
     risk: RiskGene
+    # Optional second book: scored INSTEAD of `signal` while risk.regime_filter
+    # reads "off" (SPY under its 200DMA, VIX percentile over the limit). None —
+    # the default, omitted from the canonical JSON — is exactly the old behavior.
+    # _repair nulls it whenever there is no regime_filter to switch on.
+    signal_bear: object = None      # SignalGene or None
 
     def to_dict(self) -> dict:
         return to_dict(self)
@@ -167,6 +172,9 @@ class Genome:
                                ("%s x%.1f" % (r.regime_filter, r.regime_scale), r.regime_filter),
                                ("dd %s" % r.dd_limit, r.dd_limit)) if v is not None]
         bits.append(", ".join(risk) if risk else "no overlays")
+        if self.signal_bear is not None:
+            bits.append("bear: %s h%d" % (self.signal_bear.family,
+                                          self.signal_bear.horizon))
         return " | ".join(bits)
 
 
@@ -195,7 +203,7 @@ def _signal_from_dict(s: dict) -> SignalGene:
 
 def to_dict(g: Genome) -> dict:
     """Plain JSON-able types only: tuples become lists, params become a mapping."""
-    return {
+    out = {
         "signal": _signal_to_dict(g.signal),
         "portfolio": {"n_long": g.portfolio.n_long, "n_short": g.portfolio.n_short,
                       "weighting": g.portfolio.weighting, "gross": g.portfolio.gross,
@@ -205,6 +213,9 @@ def to_dict(g: Genome) -> dict:
                  "regime_filter": g.risk.regime_filter, "regime_scale": g.risk.regime_scale,
                  "dd_limit": g.risk.dd_limit},
     }
+    if g.signal_bear is not None:                # omit-default: hash back-compat
+        out["signal_bear"] = _signal_to_dict(g.signal_bear)
+    return out
 
 
 def from_dict(d: dict) -> Genome:
@@ -217,7 +228,9 @@ def from_dict(d: dict) -> Genome:
                                 rebalance_days=int(p["rebalance_days"])),
         risk=RiskGene(stop_loss=r["stop_loss"], trail_stop=r["trail_stop"],
                       regime_filter=r["regime_filter"], regime_scale=r["regime_scale"],
-                      dd_limit=r["dd_limit"]))
+                      dd_limit=r["dd_limit"]),
+        signal_bear=(_signal_from_dict(d["signal_bear"])
+                     if "signal_bear" in d else None))
 
 
 def canonical_json(g: Genome) -> str:
@@ -266,9 +279,8 @@ def _repair_features(family, features, feature_names):
     return tuple(keep[:hi])
 
 
-def _repair(g: Genome, feature_names=None) -> Genome:
-    s, p, r = g.signal, g.portfolio, g.risk
-
+def _repair_signal(s: SignalGene, feature_names=None) -> SignalGene:
+    """One signal block dragged back inside BOUNDS — used for both books."""
     family = s.family if s.family in BOUNDS["families"] else BOUNDS["families"][0]
     grids = BOUNDS["params"][family]
     params = dict(s.params)
@@ -276,15 +288,20 @@ def _repair(g: Genome, feature_names=None) -> Genome:
     for k in grids:                                  # a family hop can leave a gap
         if k not in params:
             params[k] = grids[k][len(grids[k]) // 2]
-    signal = SignalGene(family=family,
-                        horizon=_snap(s.horizon, BOUNDS["horizon"]),
-                        refit_days=_snap(s.refit_days, BOUNDS["refit_days"]),
-                        features=_repair_features(family, s.features, feature_names),
-                        params=tuple(sorted(params.items())),
-                        # Rules never fit: the gene is forced clean rather than
-                        # inert (unlike regime_scale, nothing forces it to exist).
-                        train_window=(_snap(s.train_window, BOUNDS["train_window"])
-                                      if family in BOUNDS["model_families"] else None))
+    return SignalGene(family=family,
+                      horizon=_snap(s.horizon, BOUNDS["horizon"]),
+                      refit_days=_snap(s.refit_days, BOUNDS["refit_days"]),
+                      features=_repair_features(family, s.features, feature_names),
+                      params=tuple(sorted(params.items())),
+                      # Rules never fit: the gene is forced clean rather than
+                      # inert (unlike regime_scale, nothing forces it to exist).
+                      train_window=(_snap(s.train_window, BOUNDS["train_window"])
+                                    if family in BOUNDS["model_families"] else None))
+
+
+def _repair(g: Genome, feature_names=None) -> Genome:
+    p, r = g.portfolio, g.risk
+    signal = _repair_signal(g.signal, feature_names)
 
     pg = BOUNDS["portfolio"]
     n_long = int(np.clip(p.n_long, pg["n_long"][0], pg["n_long"][-1]))
@@ -310,7 +327,12 @@ def _repair(g: Genome, feature_names=None) -> Genome:
                     regime_filter=_snap(r.regime_filter, rg["regime_filter"]),
                     regime_scale=_snap(r.regime_scale, rg["regime_scale"]),
                     dd_limit=_snap(r.dd_limit, rg["dd_limit"]))
-    return Genome(signal=signal, portfolio=portfolio, risk=risk)
+
+    # A bear book with no regime detector to switch on is dead weight in the
+    # space: null it rather than let it inflate the trial count as an inert gene.
+    bear = (_repair_signal(g.signal_bear, feature_names)
+            if g.signal_bear is not None and risk.regime_filter is not None else None)
+    return Genome(signal=signal, portfolio=portfolio, risk=risk, signal_bear=bear)
 
 
 # ── operators ──────────────────────────────────────────────────────────────────
@@ -356,10 +378,17 @@ def _random_risk(rng):
 
 def random_genome(rng, feature_names, family=None) -> Genome:
     """A uniformly drawn member of BOUNDS — the immigrant operator, and the seed
-    population. `family` forces the signal family (stratified immigrants)."""
+    population. `family` forces the signal family (stratified immigrants). A
+    genome that drew a regime filter carries a bear book with prob P_BEAR_SIGNAL —
+    the entry point for two-book strategies (crossover and block resampling then
+    recombine them)."""
+    risk = _random_risk(rng)
+    bear = (_random_signal(rng, feature_names)
+            if risk.regime_filter is not None
+            and rng.random() < config.P_BEAR_SIGNAL else None)
     return _repair(Genome(signal=_random_signal(rng, feature_names, family=family),
                           portfolio=_random_portfolio(rng),
-                          risk=_random_risk(rng)), feature_names)
+                          risk=risk, signal_bear=bear), feature_names)
 
 
 def _tunables(g: Genome) -> list:
@@ -418,13 +447,17 @@ def _mutate_features(g: Genome, rng, feature_names) -> Genome:
 
 def _resample_block(g: Genome, rng, feature_names) -> Genome:
     """Redraw one whole block. The signal block keeps its family — swapping the
-    family is a separate, rarer move."""
-    which = int(rng.integers(3))
+    family is a separate, rarer move. The fourth arm redraws the bear book;
+    _repair nulls it on a filterless genome, and mutate's forced-retry loop
+    already handles that no-op."""
+    which = int(rng.integers(4))
     if which == 0:
         return replace(g, signal=_random_signal(rng, feature_names, family=g.signal.family))
     if which == 1:
         return replace(g, portfolio=_random_portfolio(rng))
-    return replace(g, risk=_random_risk(rng))
+    if which == 2:
+        return replace(g, risk=_random_risk(rng))
+    return replace(g, signal_bear=_random_signal(rng, feature_names))
 
 
 def _family_hop(g: Genome, rng, feature_names) -> Genome:
@@ -487,7 +520,8 @@ def crossover(a: Genome, b: Genome, rng) -> Genome:
     """
     child = Genome(signal=a.signal if rng.random() < 0.5 else b.signal,
                    portfolio=a.portfolio if rng.random() < 0.5 else b.portfolio,
-                   risk=a.risk if rng.random() < 0.5 else b.risk)
+                   risk=a.risk if rng.random() < 0.5 else b.risk,
+                   signal_bear=a.signal_bear if rng.random() < 0.5 else b.signal_bear)
     return _repair(child)
 
 

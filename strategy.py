@@ -127,27 +127,26 @@ def _date_level(arr: np.ndarray) -> np.ndarray:
     return np.where(finite.any(axis=1), vals, np.nan)
 
 
-class StrategyAgent:
-    """One genome, one market, one cost model. `run_episode` is the whole API."""
+class _SignalEngine:
+    """One signal block's machinery: matrices, refits, cross-sectional scores.
 
-    def __init__(self, genome, market, cost=None, cfg=config):
-        self.genome = genome
+    A StrategyAgent owns one engine per book — `signal`, and `signal_bear` when
+    the genome carries one. The engine knows nothing about portfolios, overlays
+    or regimes: it turns a SignalGene plus a market into scores, refitting on
+    its own cadence under the purge/embargo contract in `fit`. Each engine
+    validates its own needs (seasonal column, feature columns) at construction.
+    """
+
+    def __init__(self, sig, market, cfg=config):
+        self.sig = sig
         self.market = market
-        self.cost = cost if cost is not None else CostModel()
         self.cfg = cfg
         self.n = len(market.symbols)
         self.close = market.close
-        self._model = None
-        self._fit_mask = None          # set per episode; see run_episode's fit_date_mask
-
-        sig = genome.signal
-        self.is_model = genome.is_model
         self.params = sig.pdict
-
-        # Trailing stats every family may need: never per bar, and — since they
-        # depend only on the bars — never per genome either. See _cached_roll.
-        self._vol = _cached_roll(market, "vol", cfg.REALIZED_VOL_DAYS)
-        self._ma = _cached_roll(market, "ma", cfg.TREND_MA_DAYS)
+        self.is_model = sig.family in BOUNDS["model_families"]
+        self._model = None
+        self._ma = _cached_roll(market, "ma", cfg.TREND_MA_DAYS)  # meanrev trend gate
 
         self._seasonal = None
         if sig.family == "seasonal_rule":
@@ -156,19 +155,6 @@ class StrategyAgent:
                 raise ValueError("seasonal_rule needs the '%s' feature column; "
                                  "run features.build_features(market) first" % col)
             self._seasonal = market.features[col]
-
-        self._spy = None
-        if genome.risk.regime_filter == "spy_200dma":
-            if cfg.BENCHMARK not in market.symbols:
-                raise ValueError("regime filter spy_200dma needs %s in the universe"
-                                 % cfg.BENCHMARK)
-            self._spy = market.symbols.index(cfg.BENCHMARK)
-        self._vix_pct = None
-        if genome.risk.regime_filter == "vix_pct_80":
-            col = "vix_pct"
-            if col not in getattr(market, "feature_names", ()):
-                raise ValueError("regime filter vix_pct_80 needs the '%s' column" % col)
-            self._vix_pct = _date_level(market.features[col])
 
         # Model families: the design matrix and the labels, laid out once.
         self._X = self._y = self._y_class = None
@@ -216,7 +202,7 @@ class StrategyAgent:
         DROPPED by the imputer, and the fitted model would expect fewer columns
         than the live cross-section hands it.
         """
-        family, p = self.genome.signal.family, self.params
+        family, p = self.sig.family, self.params
         steps = [("impute", SimpleImputer(strategy="median", keep_empty_features=True))]
         if family in ("ridge", "logistic"):
             steps.append(("scale", StandardScaler()))
@@ -232,42 +218,43 @@ class StrategyAgent:
                 random_state=self.cfg.SEED)
         return Pipeline(steps + [("clf", clf)])
 
-    def _trainable_dates(self, last: int, h: int) -> np.ndarray:
+    def _trainable_dates(self, last: int, h: int, fit_mask) -> np.ndarray:
         """Per-date mask over bars 0..last: may a row dated there be trained on?
 
         None (the default episode) allows every date and this is all-True — the
-        purge in `_fit` is the only restriction. With a `fit_date_mask` (CPCV: the
+        purge in `fit` is the only restriction. With a `fit_date_mask` (CPCV: the
         test blocks and their embargo are False) a row is trainable only when BOTH
         its own date AND its label's resolution date t1 = date + horizon fall on
         mask-True days, so a training label can never overlap a test block.
         """
-        if self._fit_mask is None:
+        if fit_mask is None:
             return np.ones(last + 1, dtype=bool)
-        own = self._fit_mask[:last + 1]
-        t1 = self._fit_mask[h:h + last + 1]            # t1 <= last + h < len(dates)
+        own = fit_mask[:last + 1]
+        t1 = fit_mask[h:h + last + 1]                  # t1 <= last + h < len(dates)
         return own & t1
 
-    def _fit(self, f: int, fit_audit) -> bool:
+    def fit(self, f: int, fit_audit, fit_mask=None, tag="main") -> bool:
         """Refit at bar f on resolved, embargoed labels only. False = not yet.
 
         `train_window` (a gene) bounds how far BACK a refit may reach: None is
         the expanding window from bar 0, an int keeps only the trailing that-many
         label rows by date. The purge boundary is untouched either way — the
-        window trims old rows, never recent ones.
+        window trims old rows, never recent ones. `tag` names the book in the
+        audit trail ("main" | "bear").
         """
-        h = self.genome.signal.horizon
+        h = self.sig.horizon
         last = f - self.cfg.WF_EMBARGO_DAYS - h        # the purge boundary, in bars
         if last < 0 or last + 1 < self.cfg.WF_MIN_TRAIN_DAYS:
             return False
-        tw = self.genome.signal.train_window
+        tw = self.sig.train_window
         lo = 0 if tw is None else max(0, last + 1 - int(tw))
 
-        y_mat = self._y if self.genome.signal.family == "ridge" else self._y_class
+        y_mat = self._y if self.sig.family == "ridge" else self._y_class
         X = self._X[lo:last + 1].reshape(-1, self._X.shape[2])
         y = y_mat[lo:last + 1].reshape(-1)
         labelled = np.isfinite(self._y[lo:last + 1]).reshape(-1)
         usable = labelled & np.isfinite(X).any(axis=1)
-        usable &= np.repeat(self._trainable_dates(last, h)[lo:], self._X.shape[1])
+        usable &= np.repeat(self._trainable_dates(last, h, fit_mask)[lo:], self._X.shape[1])
         rows = np.flatnonzero(usable)
         if len(rows) < self.cfg.WF_MIN_TRAIN_DAYS:
             return False
@@ -285,16 +272,17 @@ class StrategyAgent:
                               "max_t1_used": self.market.dates[max_row + h],
                               "min_t_used": self.market.dates[min_row],
                               "n_rows": int(len(rows)),
-                              "family": self.genome.signal.family,
+                              "family": self.sig.family,
                               "horizon": h,
                               "embargo_days": self.cfg.WF_EMBARGO_DAYS,
                               "train_window": tw,
-                              "mask_active": self._fit_mask is not None})
+                              "engine": tag,
+                              "mask_active": fit_mask is not None})
         return True
 
     # ── scores ─────────────────────────────────────────────────────────────────
-    def _scores(self, t: int, tradable: np.ndarray) -> np.ndarray:
-        family, p = self.genome.signal.family, self.params
+    def scores(self, t: int, tradable: np.ndarray) -> np.ndarray:
+        family, p = self.sig.family, self.params
         px = self.close
 
         if family == "mom_rule":
@@ -339,6 +327,47 @@ class StrategyAgent:
             dn = proba[:, classes.index(-1)] if -1 in classes else 0.0
             out[keep] = up - dn
         return out
+
+class StrategyAgent:
+    """One genome, one market, one cost model. `run_episode` is the whole API.
+
+    Signal machinery lives in _SignalEngine — one per book. The agent owns what
+    is genome-level: portfolio construction, stops, overlays, the regime switch
+    between books, and the episode loop.
+    """
+
+    def __init__(self, genome, market, cost=None, cfg=config):
+        self.genome = genome
+        self.market = market
+        self.cost = cost if cost is not None else CostModel()
+        self.cfg = cfg
+        self.n = len(market.symbols)
+        self.close = market.close
+        self.is_model = genome.is_model
+        self._fit_mask = None          # set per episode; see run_episode's fit_date_mask
+
+        # Trailing stats every family may need: never per bar, and — since they
+        # depend only on the bars — never per genome either. See _cached_roll.
+        self._vol = _cached_roll(market, "vol", cfg.REALIZED_VOL_DAYS)
+        self._ma = _cached_roll(market, "ma", cfg.TREND_MA_DAYS)
+
+        self._spy = None
+        if genome.risk.regime_filter == "spy_200dma":
+            if cfg.BENCHMARK not in market.symbols:
+                raise ValueError("regime filter spy_200dma needs %s in the universe"
+                                 % cfg.BENCHMARK)
+            self._spy = market.symbols.index(cfg.BENCHMARK)
+        self._vix_pct = None
+        if genome.risk.regime_filter == "vix_pct_80":
+            col = "vix_pct"
+            if col not in getattr(market, "feature_names", ()):
+                raise ValueError("regime filter vix_pct_80 needs the '%s' column" % col)
+            self._vix_pct = _date_level(market.features[col])
+
+        # One engine per book; each validates its own needs at construction.
+        self.eng = _SignalEngine(genome.signal, market, cfg)
+        self.eng_bear = (_SignalEngine(genome.signal_bear, market, cfg)
+                         if genome.signal_bear is not None else None)
 
     # ── portfolio construction ─────────────────────────────────────────────────
     def _targets(self, t: int, scores: np.ndarray, tradable: np.ndarray) -> np.ndarray:
@@ -426,7 +455,9 @@ class StrategyAgent:
         r = self.genome.risk
         scale, active = 1.0, []
 
-        if self._regime_off(t):
+        # With a bear book, the response to the regime is the SWITCH (run_episode
+        # re-targets off the bear engine), not a gross cut on the bull book.
+        if self._regime_off(t) and self.eng_bear is None:
             scale, active = r.regime_scale, ["regime"]
 
         if r.dd_limit is not None:
@@ -528,29 +559,42 @@ class StrategyAgent:
                         rng=np.random.default_rng(self.cfg.SEED), decision_log=decision_log)
         obs = env.reset()
 
-        self._model = None
+        engines = [("main", self.eng)]
+        if self.eng_bear is not None:
+            engines.append(("bear", self.eng_bear))
+        for _tag, e in engines:
+            e._model = None
         self._equity = [obs["equity"]]
         self._entry = np.full(self.n, np.nan)
         self._extreme = np.full(self.n, np.nan)
         self._derisked = False
         self._target_w = np.zeros(self.n)
-        last_fit = None
+        last_fit = {tag: None for tag, _e in engines}
         last_scale = 1.0
+        last_bear = False
 
         rebalance_days = self.genome.portfolio.rebalance_days
-        refit_days = self.genome.signal.refit_days
         dates, net, gross, turn, cost_path = [], [], [], [], []
 
         step = 0
         while not env.done:
             t = obs["t"]
-            if self.is_model and (last_fit is None or step - last_fit >= refit_days):
-                if self._fit(t, fit_audit):
-                    last_fit = step
+            # Each book refits on its OWN cadence, bear included even while the
+            # regime is on — the bear book must already be warm when it flips.
+            for tag, e in engines:
+                if e.is_model and (last_fit[tag] is None
+                                   or step - last_fit[tag] >= e.sig.refit_days):
+                    if e.fit(t, fit_audit, self._fit_mask, tag):
+                        last_fit[tag] = step
 
-            if step % rebalance_days == 0:
+            bear_now = self.eng_bear is not None and self._regime_off(t)
+            if step % rebalance_days == 0 or bear_now != last_bear:
+                # A regime transition re-targets immediately: holding the bull
+                # book a month into a bear regime would make the switch
+                # decorative between monthly rebalances.
+                eng = self.eng_bear if bear_now else self.eng
                 tradable = np.isfinite(self.close[t]) & (self.close[t] > 0.0)
-                self._target_w = self._targets(t, self._scores(t, tradable), tradable)
+                self._target_w = self._targets(t, eng.scores(t, tradable), tradable)
 
             hit = self._stopped(t, env.shares)
             if hit.any():
@@ -565,10 +609,13 @@ class StrategyAgent:
             # rebalances, where the agent restates its standing target and any
             # fill is drift correction toward it rather than a new decision.
             causes = (["stop"] if hit.any() else [])
+            if bear_now != last_bear:
+                causes.append("regime_switch")         # transition-only, like the rest
             if why is not None and scale != last_scale:
                 causes.append(why)
             reason = "+".join(causes) if causes else "rebalance"
             last_scale = scale
+            last_bear = bear_now
 
             before = env.shares.copy()
             equity_t = obs["equity"]

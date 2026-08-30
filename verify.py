@@ -248,11 +248,12 @@ def NAIVE_EVALUATOR_ic(agent) -> float:
     memorised its own test set comes back looking brilliant.
     """
     family = agent.genome.signal.family
-    y_mat = agent._y if family == "ridge" else agent._y_class       # noqa: SLF001
-    X = agent._X.reshape(-1, agent._X.shape[2])                     # noqa: SLF001
-    realized = agent._y.reshape(-1)                                 # noqa: SLF001
+    eng = agent.eng                                     # the main book's engine
+    y_mat = eng._y if family == "ridge" else eng._y_class           # noqa: SLF001
+    X = eng._X.reshape(-1, eng._X.shape[2])                         # noqa: SLF001
+    realized = eng._y.reshape(-1)                                   # noqa: SLF001
     rows = np.flatnonzero(np.isfinite(realized) & np.isfinite(X).any(axis=1))
-    model = agent._pipeline()                                       # noqa: SLF001
+    model = eng._pipeline()                                         # noqa: SLF001
     Xr = np.asarray(X[rows], dtype=np.float64)
     model.fit(Xr, y_mat.reshape(-1)[rows])
     return float(np.corrcoef(_predict(model, family, Xr), realized[rows])[0, 1])
@@ -270,19 +271,20 @@ def arena_streaming_ic(agent, market) -> dict:
     (the quant-standard IC, and the one that is not dominated by a handful of
     volatile dates), and the count behind them.
     """
-    agent._model = None                                             # noqa: SLF001
+    eng = agent.eng                                     # the main book's engine
+    eng._model = None                                               # noqa: SLF001
     refit = agent.genome.signal.refit_days
     h = agent.genome.signal.horizon
-    fwd = agent._y                                                  # noqa: SLF001
+    fwd = eng._y                                                    # noqa: SLF001
     last_fit, first, preds, realz = None, None, [], []
     for t in range(len(market.dates)):
         if last_fit is None or t - last_fit >= refit:
-            if agent._fit(t, None):                                 # noqa: SLF001
+            if eng.fit(t, None):
                 last_fit, first = t, (first if first is not None else t)
-        if agent._model is None or t >= len(market.dates) - h:      # noqa: SLF001
+        if eng._model is None or t >= len(market.dates) - h:        # noqa: SLF001
             continue
         tradable = np.isfinite(market.close[t]) & (market.close[t] > 0.0)
-        s = agent._scores(t, tradable)                              # noqa: SLF001
+        s = eng.scores(t, tradable)
         keep = np.isfinite(s) & np.isfinite(fwd[t])
         preds.append(s[keep])
         realz.append(fwd[t][keep])
@@ -369,7 +371,7 @@ def test_planted_leak():
     stream = arena_streaming_ic(agent, market)
     res = evaluate.full_eval(genome, market)
     coef = dict(zip(genome.signal.features,
-                    agent._model.named_steps["clf"].coef_))        # noqa: SLF001
+                    agent.eng._model.named_steps["clf"].coef_))    # noqa: SLF001
 
     check("(a) naive evaluator is fooled by the planted future", naive_ic > 0.30,
           "pooled in-sample IC = %.4f on a market with no true edge" % naive_ic)
@@ -714,6 +716,26 @@ def test_determinism():
         check("no checkpoint directory survives a completed generation",
               not glob.glob(os.path.join(dirs[2], "tmp_gen_*")),
               "state/tmp_gen_* removed once the population advanced")
+
+        # ── the two-book leg ──────────────────────────────────────────────────
+        # A signal_bear genome runs both engines on their own cadences, audits
+        # each under its engine tag, and stays byte-deterministic. Both signals
+        # are models here so BOTH audit (a rule main would audit nothing).
+        feats = tuple(sorted(market.feature_names))[:3]
+        bear_g = gn.Genome(
+            signal=gn.SignalGene("ridge", 10, 63, feats, (("alpha", 1.0),)),
+            portfolio=gn.PortfolioGene(3, 0, "equal", 1.0, None, 5),
+            risk=gn.RiskGene(None, None, "spy_200dma", 0.0, None),
+            signal_bear=gn.SignalGene("ridge", 21, 126, feats, (("alpha", 10.0),)))
+        aud1, aud2 = [], []
+        r1 = StrategyAgent(bear_g, market).run_episode(fit_audit=aud1)
+        r2 = StrategyAgent(bear_g, market).run_episode(fit_audit=aud2)
+        engines = {row.get("engine") for row in aud1}
+        check("a two-book genome audits both engines", engines == {"main", "bear"},
+              "engines seen: %s over %d fits" % (sorted(str(e) for e in engines),
+                                                 len(aud1)))
+        check("two-book episode is byte-deterministic",
+              r1["daily_net"].tobytes() == r2["daily_net"].tobytes(), "")
     finally:
         for k, v in saved_cfg.items():
             setattr(config, k, v)
@@ -2046,6 +2068,22 @@ def test_genome_ops():
                                          features=("rsi", "rs_spy", "rv21"),
                                          params=(("alpha", 1.0),)),
                     portfolio=g0.portfolio, risk=g0.risk)).hash(), "")
+
+    # signal_bear: omitted at default, round-trips, moves the hash, and cannot
+    # exist without a regime detector to switch on.
+    base = gn.from_dict(HASH_FIXTURES[0][0])          # has regime_filter=spy_200dma
+    bear = gn.SignalGene(family="mom_rule", horizon=21, refit_days=126,
+                         params=(("lookback", 63), ("skip", 21)))
+    gb = gn._repair(gn.Genome(signal=base.signal, portfolio=base.portfolio,
+                              risk=base.risk, signal_bear=bear))
+    check("signal_bear round-trips", gn.from_dict(gb.to_dict()).signal_bear is not None, "")
+    check("signal_bear changes the hash", gb.hash() != base.hash(), "")
+    check("default signal_bear omitted from json",
+          "signal_bear" not in gn.canonical_json(base), "")
+    no_filter = gn._repair(gn.Genome(signal=base.signal, portfolio=base.portfolio,
+        risk=gn.RiskGene(stop_loss=None, trail_stop=None, regime_filter=None,
+                         regime_scale=0.0, dd_limit=None), signal_bear=bear))
+    check("repair nulls a bear book with no detector", no_filter.signal_bear is None, "")
 
 
 # ── 10. no wall-clock in compute paths ─────────────────────────────────────────

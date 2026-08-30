@@ -302,6 +302,8 @@ P_MUT_FEATURE = 0.30                # add / drop / swap one feature
 P_MUT_BLOCK = 0.15                  # resample a whole gene block
 P_MUT_FAMILY = 0.05                 # hop to another signal family
 CROSSOVER_FRAC = 0.25               # share of offspring bred by crossover
+P_BEAR_SIGNAL = 0.25                # immigrant/seed draw prob of carrying a
+                                    # bear-regime signal (given a regime filter)
 MUT_MAX_TRIES = 4                   # bound on re-drawing a mutation that changed nothing
                                     # (a genome sitting on the n_long+n_short floor can
                                     # have single steps undone by the repair)

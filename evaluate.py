@@ -126,6 +126,10 @@ def _first_active(dates, fit_audit, is_model: bool, warmup: int) -> int:
     — where a model can already fit at the era's first bar off the pre-era
     history, so a rule needs no extra handicap).
     """
+    # Only the MAIN book gates scoring: a bear engine's fits (signal_bear) are
+    # interleaved in the same audit, and a bear book that fits first must not
+    # start the scoring clock for a main model that cannot act yet.
+    fit_audit = [r for r in fit_audit if r.get("engine", "main") == "main"]
     if not is_model:
         return int(min(warmup, len(dates)))
     if not fit_audit:
