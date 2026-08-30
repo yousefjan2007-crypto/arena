@@ -233,7 +233,11 @@ ELITE_N = 4
 IMMIGRANT_N = 4
 TOURNAMENT_K = 4
 SCREEN_FRAC = 0.5                   # fraction of the population surviving the F0 screen
-PARSIMONY_PENALTY = 0.01            # Sharpe penalty per feature (complexity tax)
+PARSIMONY_PENALTY = 0.003           # Sharpe penalty per feature (complexity tax);
+                                    # was 0.01: a 12-feature model paid 0.12 Sharpe
+                                    # vs a zero-feature rule's 0.00 — a structural
+                                    # bias toward exactly the static families, on
+                                    # top of the model warm-up handicap.
 DEDUP_MAX_TRIES = 10                # re-mutations before a colliding child is replaced
                                     # by a fresh immigrant (evolution.next_generation)
 HOF_SIZE = 10                       # hall-of-fame depth (top-N all-time by pre-vault Sharpe)
