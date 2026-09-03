@@ -217,6 +217,41 @@
    "sharpe_prevault": 1.2012580553552514
   },
   {
+   "birth_gen": 38,
+   "family": "seasonal_rule",
+   "generation": 38,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 11,
+     "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 252
+    }
+   },
+   "hash": "2b753254268e",
+   "n_days_prevault": 6041,
+   "op": "mutate",
+   "parent_hash": "6e02ebe6e7b6",
+   "score": 1.058456617027815,
+   "sharpe_prevault": 1.2012295347310369
+  },
+  {
    "birth_gen": 34,
    "family": "seasonal_rule",
    "generation": 34,
@@ -323,41 +358,6 @@
    "parent_hash": "c17f77b7d09d",
    "score": 0.9759403300064187,
    "sharpe_prevault": 1.1866845904580474
-  },
-  {
-   "birth_gen": 27,
-   "family": "seasonal_rule",
-   "generation": 37,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 126
-    }
-   },
-   "hash": "14574361d767",
-   "n_days_prevault": 6041,
-   "op": "elite",
-   "parent_hash": "4b899e1cb71e",
-   "score": 1.0672502684369727,
-   "sharpe_prevault": 1.1826247363751037
   }
  ],
  "note": "REWRITTEN every generation: a ranked CACHE of the best pre-vault Sharpes on record, regenerable from the trial ledger and the returns artifacts. Scores are the LATEST evaluation of each genome, not its best ever \u2014 see evolution.update_hall_of_fame.",
