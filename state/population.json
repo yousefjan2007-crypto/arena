@@ -1,6 +1,46 @@
 {
  "entries": [
   {
+   "birth_gen": 41,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 5,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 63
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "28f30596afd9",
+   "op": "elite",
+   "parent_hash": "72a4a79ab77c"
+  },
+  {
    "birth_gen": 40,
    "genome": {
     "portfolio": {
@@ -104,150 +144,15 @@
    "parent_hash": "14574361d767"
   },
   {
-   "birth_gen": 33,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 63
-    }
-   },
-   "hash": "4b899e1cb71e",
-   "op": "elite",
-   "parent_hash": [
-    "f4f3c648dd77",
-    "14574361d767"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.15,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "meanrev_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {
-      "lookback": 5,
-      "trend_gate": false
-     },
-     "refit_days": 126
-    }
-   },
-   "hash": "ca80d98d0819",
-   "op": "mutate",
-   "parent_hash": "6822e370db05"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 252
-    }
-   },
-   "hash": "ce02d8058a36",
-   "op": "crossover",
-   "parent_hash": [
-    "1f36ed89525e",
-    "ce02d8058a36"
-   ]
-  },
-  {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 1.3,
-     "n_long": 11,
-     "n_short": 4,
-     "rebalance_days": 21,
+     "n_long": 5,
+     "n_short": 0,
+     "rebalance_days": 1,
      "vol_target": 0.1,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": null,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "logistic",
-     "features": [
-      "mkt_vol_ratio",
-      "rev_1",
-      "xs_mom_63"
-     ],
-     "horizon": 63,
-     "params": {
-      "C": 0.01
-     },
-     "refit_days": 252
-    }
-   },
-   "hash": "98c2dea73a2e",
-   "op": "mutate",
-   "parent_hash": "62b866ec937c"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 12,
-     "n_short": 3,
-     "rebalance_days": 5,
-     "vol_target": 0.15,
-     "weighting": "score"
+     "weighting": "equal"
     },
     "risk": {
      "dd_limit": null,
@@ -260,39 +165,6 @@
      "family": "seasonal_rule",
      "features": [],
      "horizon": 10,
-     "params": {},
-     "refit_days": 126
-    }
-   },
-   "hash": "3088f7da6dca",
-   "op": "crossover",
-   "parent_hash": [
-    "11ca47a4f553",
-    "cf1555a3b1c0"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.3,
-     "n_long": 5,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.1,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
      "params": {},
      "refit_days": 63
     },
@@ -307,12 +179,45 @@
      "refit_days": 63
     }
    },
-   "hash": "28f30596afd9",
-   "op": "mutate",
-   "parent_hash": "72a4a79ab77c"
+   "hash": "ddf8fe333923",
+   "op": "crossover",
+   "parent_hash": [
+    "28f30596afd9",
+    "72a4a79ab77c"
+   ]
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 11,
+     "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.15,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 5,
+     "params": {},
+     "refit_days": 63
+    }
+   },
+   "hash": "f63ee5615e02",
+   "op": "mutate",
+   "parent_hash": "3cdfb6a2ddc0"
+  },
+  {
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 1.0,
@@ -330,242 +235,63 @@
      "trail_stop": 0.2
     },
     "signal": {
-     "family": "seasonal_rule",
-     "features": [],
+     "family": "logistic",
+     "features": [
+      "px_ema200",
+      "rv21",
+      "vix",
+      "vol_regime"
+     ],
      "horizon": 21,
-     "params": {},
+     "params": {
+      "C": 0.01
+     },
      "refit_days": 252
     }
    },
-   "hash": "5b0b6c7b285e",
+   "hash": "b9ccddfa6e3b",
    "op": "mutate",
-   "parent_hash": "f86aa39f41d0"
+   "parent_hash": "5b0b6c7b285e"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 1.3,
-     "n_long": 12,
-     "n_short": 3,
+     "gross": 0.8,
+     "n_long": 11,
+     "n_short": 0,
      "rebalance_days": 21,
-     "vol_target": 0.1,
-     "weighting": "inv_vol"
+     "vol_target": null,
+     "weighting": "score"
     },
     "risk": {
      "dd_limit": 0.1,
      "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": null,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "ridge",
-     "features": [
-      "mkt_vol_ratio",
-      "mom_12_1",
-      "rev_5",
-      "rs_sector",
-      "vix_chg21",
-      "vix_pct",
-      "vol_ratio",
-      "vol_regime",
-      "xs_rs_sector"
-     ],
-     "horizon": 21,
-     "params": {
-      "alpha": 1.0
-     },
-     "refit_days": 126,
-     "train_window": 504
-    }
-   },
-   "hash": "5d7d7b48114f",
-   "op": "crossover",
-   "parent_hash": [
-    "df7ec298925a",
-    "1f36ed89525e"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.15,
-     "regime_filter": "spy_200dma",
      "regime_scale": 0.0,
-     "stop_loss": 0.15,
+     "stop_loss": 0.1,
      "trail_stop": 0.2
     },
     "signal": {
      "family": "seasonal_rule",
      "features": [],
-     "horizon": 10,
+     "horizon": 21,
      "params": {},
      "refit_days": 126
     }
    },
-   "hash": "5d9fb0632c9f",
+   "hash": "8749e244e503",
    "op": "mutate",
-   "parent_hash": "cf1555a3b1c0"
+   "parent_hash": "14574361d767"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 0.8,
-     "n_long": 11,
+     "n_long": 4,
      "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 252
-    }
-   },
-   "hash": "8f7dc65760ee",
-   "op": "crossover",
-   "parent_hash": [
-    "8f7dc65760ee",
-    "3cdfb6a2ddc0"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 252
-    }
-   },
-   "hash": "c967ed8b54b5",
-   "op": "mutate",
-   "parent_hash": "8f7dc65760ee"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 7,
-     "n_short": 1,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 252
-    },
-    "signal_bear": {
-     "family": "logistic",
-     "features": [
-      "mom_126",
-      "rev_1",
-      "rev_5"
-     ],
-     "horizon": 10,
-     "params": {
-      "C": 10.0
-     },
-     "refit_days": 126,
-     "train_window": 504
-    }
-   },
-   "hash": "34fef987a9e0",
-   "op": "crossover",
-   "parent_hash": [
-    "8f7dc65760ee",
-    "6d381529b1e7"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 11,
-     "n_short": 1,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.15,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 10,
-     "params": {},
-     "refit_days": 126
-    }
-   },
-   "hash": "60a4d8a40805",
-   "op": "mutate",
-   "parent_hash": "f4c279cc23b1"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
+     "rebalance_days": 1,
+     "vol_target": 0.15,
      "weighting": "score"
     },
     "risk": {
@@ -580,32 +306,95 @@
      "features": [],
      "horizon": 21,
      "params": {},
-     "refit_days": 63
+     "refit_days": 126
+    }
+   },
+   "hash": "91ad284f6939",
+   "op": "mutate",
+   "parent_hash": "8b8ab9b03b48"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 5,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "equal"
     },
-    "signal_bear": {
-     "family": "seasonal_rule",
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "mom_rule",
      "features": [],
      "horizon": 10,
-     "params": {},
+     "params": {
+      "lookback": 252,
+      "skip": 5
+     },
+     "refit_days": 126
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
      "refit_days": 63
     }
    },
-   "hash": "c6026d2e9a61",
-   "op": "crossover",
-   "parent_hash": [
-    "4b899e1cb71e",
-    "d9e03957d2d2"
-   ]
+   "hash": "e85a71447c62",
+   "op": "mutate",
+   "parent_hash": "39a8973c39b2"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 11,
+     "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 63,
+     "params": {},
+     "refit_days": 252
+    }
+   },
+   "hash": "b17720f27abc",
+   "op": "mutate",
+   "parent_hash": "c967ed8b54b5"
+  },
+  {
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 0.8,
      "n_long": 11,
      "n_short": 0,
      "rebalance_days": 21,
-     "vol_target": null,
+     "vol_target": 0.1,
      "weighting": "score"
     },
     "risk": {
@@ -618,65 +407,80 @@
     "signal": {
      "family": "seasonal_rule",
      "features": [],
-     "horizon": 10,
+     "horizon": 5,
      "params": {},
      "refit_days": 63
     }
    },
-   "hash": "ee97a2e76cf9",
+   "hash": "f351b73622ce",
    "op": "mutate",
    "parent_hash": "3cdfb6a2ddc0"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 0.6,
-     "n_long": 3,
+     "gross": 0.8,
+     "n_long": 12,
      "n_short": 0,
-     "rebalance_days": 5,
-     "vol_target": 0.15,
-     "weighting": "equal"
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
     },
     "risk": {
      "dd_limit": 0.1,
-     "regime_filter": "vix_pct_80",
-     "regime_scale": 0.5,
+     "regime_filter": null,
+     "regime_scale": 0.0,
      "stop_loss": 0.1,
-     "trail_stop": 0.1
+     "trail_stop": 0.2
     },
     "signal": {
-     "family": "ridge",
-     "features": [
-      "bb_z",
-      "curve_chg21",
-      "dxy_mom21",
-      "mkt_breadth_200",
-      "mom_126",
-      "mom_12_1",
-      "mom_21",
-      "mom_5",
-      "mom_63",
-      "rev_5",
-      "rv21",
-      "us10y_chg21",
-      "vix_chg21",
-      "vol_regime"
-     ],
-     "horizon": 10,
-     "params": {
-      "alpha": 1.0
-     },
-     "refit_days": 126,
-     "train_window": 1260
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 63
     }
    },
-   "hash": "7fac8985b0a2",
-   "op": "mutate",
-   "parent_hash": "1f36ed89525e"
+   "hash": "1193d9547091",
+   "op": "crossover",
+   "parent_hash": [
+    "c6026d2e9a61",
+    "9915b439fa3b"
+   ]
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 12,
+     "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.1,
+     "regime_filter": null,
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 126
+    }
+   },
+   "hash": "06d033dcc022",
+   "op": "mutate",
+   "parent_hash": "9915b439fa3b"
+  },
+  {
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 1.0,
@@ -684,7 +488,7 @@
      "n_short": 1,
      "rebalance_days": 21,
      "vol_target": null,
-     "weighting": "inv_vol"
+     "weighting": "score"
     },
     "risk": {
      "dd_limit": null,
@@ -704,15 +508,45 @@
      "refit_days": 126
     }
    },
-   "hash": "56e146ed7d3c",
+   "hash": "21d7cd36dc45",
    "op": "mutate",
-   "parent_hash": "21d7cd36dc45"
+   "parent_hash": "8d4cdf277311"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 1.0,
+     "n_long": 11,
+     "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 252
+    }
+   },
+   "hash": "cc9295be3d0f",
+   "op": "mutate",
+   "parent_hash": "c967ed8b54b5"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
      "n_long": 11,
      "n_short": 0,
      "rebalance_days": 21,
@@ -723,7 +557,40 @@
      "dd_limit": null,
      "regime_filter": "spy_200dma",
      "regime_scale": 0.0,
-     "stop_loss": 0.15,
+     "stop_loss": 0.1,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 5,
+     "params": {},
+     "refit_days": 63
+    }
+   },
+   "hash": "06ed3d1481cc",
+   "op": "crossover",
+   "parent_hash": [
+    "a889f03be5ac",
+    "8f7dc65760ee"
+   ]
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 11,
+     "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
      "trail_stop": 0.2
     },
     "signal": {
@@ -731,20 +598,160 @@
      "features": [],
      "horizon": 5,
      "params": {},
-     "refit_days": 126
+     "refit_days": 252
     }
    },
-   "hash": "eb2d8a710bfe",
+   "hash": "b5d4b8d85c8d",
    "op": "mutate",
-   "parent_hash": "c12bec87f690"
+   "parent_hash": "ee97a2e76cf9"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 0.8,
      "n_long": 11,
      "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 10,
+     "params": {},
+     "refit_days": 63
+    }
+   },
+   "hash": "182a66d86e9c",
+   "op": "mutate",
+   "parent_hash": "ee97a2e76cf9"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 4,
+     "n_short": 1,
+     "rebalance_days": 21,
+     "vol_target": 0.15,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.5,
+     "stop_loss": 0.05,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 252
+    }
+   },
+   "hash": "ab4edc72ed13",
+   "op": "crossover",
+   "parent_hash": [
+    "c967ed8b54b5",
+    "7c26615736ff"
+   ]
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 11,
+     "n_short": 1,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 252
+    }
+   },
+   "hash": "de4c7bac87b5",
+   "op": "mutate",
+   "parent_hash": "5b0b6c7b285e"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 8,
+     "n_short": 2,
+     "rebalance_days": 21,
+     "vol_target": 0.2,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "hgb",
+     "features": [
+      "dxy_mom21",
+      "ema_cross",
+      "mom_126",
+      "rev_1",
+      "rsi",
+      "vol_regime",
+      "xs_mom_21"
+     ],
+     "horizon": 10,
+     "params": {
+      "learning_rate": 0.1,
+      "max_depth": 2,
+      "max_iter": 200,
+      "min_samples_leaf": 100
+     },
+     "refit_days": 126,
+     "train_window": 1260
+    }
+   },
+   "hash": "666a29e4797f",
+   "op": "crossover",
+   "parent_hash": [
+    "ee97a2e76cf9",
+    "8b86d33e8903"
+   ]
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 11,
+     "n_short": 1,
      "rebalance_days": 21,
      "vol_target": null,
      "weighting": "score"
@@ -752,9 +759,39 @@
     "risk": {
      "dd_limit": 0.15,
      "regime_filter": null,
-     "regime_scale": 0.0,
+     "regime_scale": 0.5,
      "stop_loss": null,
-     "trail_stop": 0.1
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 252
+    }
+   },
+   "hash": "36fa7ea0e42b",
+   "op": "mutate",
+   "parent_hash": "5b0b6c7b285e"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 11,
+     "n_short": 0,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
     },
     "signal": {
      "family": "seasonal_rule",
@@ -764,26 +801,26 @@
      "refit_days": 126
     }
    },
-   "hash": "5fd2dfeb6cc5",
+   "hash": "2ebad8b8b2e1",
    "op": "crossover",
    "parent_hash": [
-    "c12bec87f690",
-    "75298eeaa92c"
+    "c967ed8b54b5",
+    "3cdfb6a2ddc0"
    ]
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 0.8,
-     "n_long": 12,
+     "n_long": 11,
      "n_short": 0,
      "rebalance_days": 21,
      "vol_target": null,
      "weighting": "score"
     },
     "risk": {
-     "dd_limit": 0.1,
+     "dd_limit": null,
      "regime_filter": null,
      "regime_scale": 0.0,
      "stop_loss": 0.1,
@@ -797,86 +834,26 @@
      "refit_days": 126
     }
    },
-   "hash": "9915b439fa3b",
+   "hash": "920b949c8c51",
    "op": "mutate",
-   "parent_hash": "dbe614d7541a"
+   "parent_hash": "4b899e1cb71e"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 1.0,
      "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 5,
-     "params": {},
-     "refit_days": 63
-    }
-   },
-   "hash": "a889f03be5ac",
-   "op": "mutate",
-   "parent_hash": "14574361d767"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": 0.1,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": null,
-     "regime_scale": 0.0,
-     "stop_loss": 0.05,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 63
-    }
-   },
-   "hash": "b995a875e733",
-   "op": "mutate",
-   "parent_hash": "a73921a82f7c"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 12,
      "n_short": 1,
      "rebalance_days": 21,
      "vol_target": null,
-     "weighting": "score"
+     "weighting": "inv_vol"
     },
     "risk": {
      "dd_limit": null,
      "regime_filter": "spy_200dma",
      "regime_scale": 0.0,
-     "stop_loss": 0.1,
+     "stop_loss": 0.15,
      "trail_stop": 0.2
     },
     "signal": {
@@ -887,319 +864,89 @@
      "refit_days": 126
     }
    },
-   "hash": "a01c8deb1481",
+   "hash": "e535ba37c316",
    "op": "mutate",
-   "parent_hash": "f4c279cc23b1"
+   "parent_hash": "60a4d8a40805"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 0.8,
-     "n_long": 5,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.15,
-     "weighting": "score"
+     "n_long": 11,
+     "n_short": 1,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "equal"
     },
     "risk": {
      "dd_limit": null,
      "regime_filter": "spy_200dma",
      "regime_scale": 0.0,
-     "stop_loss": 0.05,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 126
-    }
-   },
-   "hash": "8b8ab9b03b48",
-   "op": "crossover",
-   "parent_hash": [
-    "14574361d767",
-    "d9e03957d2d2"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 4,
-     "rebalance_days": 5,
-     "vol_target": 0.2,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": 0.1,
-     "regime_filter": null,
-     "regime_scale": 0.0,
-     "stop_loss": 0.15,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "hgb",
-     "features": [
-      "mom_12_1",
-      "px_ema200",
-      "rev_5",
-      "rs_spy",
-      "us10y",
-      "vix_pct"
-     ],
-     "horizon": 5,
-     "params": {
-      "learning_rate": 0.03,
-      "max_depth": 2,
-      "max_iter": 300,
-      "min_samples_leaf": 400
-     },
-     "refit_days": 126,
-     "train_window": 504
-    }
-   },
-   "hash": "f145052242cf",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 3,
-     "n_short": 4,
-     "rebalance_days": 1,
-     "vol_target": null,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": 0.2,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
      "stop_loss": 0.1,
-     "trail_stop": 0.1
+     "trail_stop": 0.2
     },
     "signal": {
      "family": "mom_rule",
      "features": [],
-     "horizon": 63,
+     "horizon": 21,
      "params": {
       "lookback": 63,
-      "skip": 5
+      "skip": 21
      },
      "refit_days": 63
     }
    },
-   "hash": "3ffef0f58a0a",
-   "op": "immigrant",
-   "parent_hash": ""
+   "hash": "5a52a04dc30b",
+   "op": "mutate",
+   "parent_hash": "6eff4da505e4"
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 1.3,
-     "n_long": 3,
-     "n_short": 4,
-     "rebalance_days": 1,
-     "vol_target": 0.15,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "vix_pct_80",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "meanrev_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {
-      "lookback": 21,
-      "trend_gate": false
-     },
-     "refit_days": 252
-    }
-   },
-   "hash": "76b6c8804577",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
+     "gross": 0.8,
      "n_long": 8,
-     "n_short": 1,
+     "n_short": 0,
      "rebalance_days": 1,
      "vol_target": 0.2,
      "weighting": "score"
     },
     "risk": {
      "dd_limit": null,
-     "regime_filter": "vix_pct_80",
+     "regime_filter": "spy_200dma",
      "regime_scale": 0.0,
      "stop_loss": null,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "logistic",
-     "features": [
-      "dvol_z",
-      "ema_cross",
-      "seasonality",
-      "xs_mom_126"
-     ],
-     "horizon": 10,
-     "params": {
-      "C": 1.0
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "2b715e1f6080",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 5,
-     "n_short": 2,
-     "rebalance_days": 1,
-     "vol_target": 0.1,
-     "weighting": "equal"
-    },
-    "risk": {
-     "dd_limit": 0.1,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.05,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "hgb",
-     "features": [
-      "bb_z",
-      "credit_mom21",
-      "mkt_breadth_200",
-      "mkt_vol_ratio",
-      "mom_10",
-      "mom_12_1",
-      "mom_252",
-      "px_ema50",
-      "rev_5",
-      "rs_sector",
-      "rsi",
-      "vix_chg21",
-      "vix_pct",
-      "vol_of_vol",
-      "xs_mom_126"
-     ],
-     "horizon": 10,
-     "params": {
-      "learning_rate": 0.05,
-      "max_depth": 2,
-      "max_iter": 100,
-      "min_samples_leaf": 100
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "5c0b95f40659",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 11,
-     "n_short": 7,
-     "rebalance_days": 1,
-     "vol_target": 0.15,
-     "weighting": "equal"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": null,
-     "regime_scale": 0.0,
-     "stop_loss": 0.05,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "mom_rule",
-     "features": [],
-     "horizon": 5,
-     "params": {
-      "lookback": 21,
-      "skip": 5
-     },
-     "refit_days": 252
-    }
-   },
-   "hash": "12fea340d166",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.3,
-     "n_long": 4,
-     "n_short": 7,
-     "rebalance_days": 1,
-     "vol_target": 0.15,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": 0.2,
-     "regime_filter": "vix_pct_80",
-     "regime_scale": 0.5,
-     "stop_loss": 0.15,
      "trail_stop": 0.2
     },
     "signal": {
      "family": "meanrev_rule",
      "features": [],
-     "horizon": 21,
+     "horizon": 10,
      "params": {
       "lookback": 21,
-      "trend_gate": false
+      "trend_gate": true
      },
      "refit_days": 63
     }
    },
-   "hash": "c02b0fdd03bb",
+   "hash": "570654c2711c",
    "op": "immigrant",
    "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 1.3,
-     "n_long": 6,
+     "gross": 0.8,
+     "n_long": 11,
      "n_short": 0,
      "rebalance_days": 21,
      "vol_target": null,
      "weighting": "score"
     },
     "risk": {
-     "dd_limit": 0.1,
+     "dd_limit": null,
      "regime_filter": "spy_200dma",
      "regime_scale": 0.0,
      "stop_loss": 0.1,
@@ -1211,98 +958,843 @@
      "horizon": 21,
      "params": {
       "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 126
+    }
+   },
+   "hash": "8a229ea936eb",
+   "op": "mutate",
+   "parent_hash": "14574361d767"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 5,
+     "n_short": 1,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "mom_rule",
+     "features": [],
+     "horizon": 10,
+     "params": {
+      "lookback": 126,
+      "skip": 5
+     },
+     "refit_days": 126
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "0109ce9ba044",
+   "op": "mutate",
+   "parent_hash": "39a8973c39b2"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 12,
+     "n_short": 7,
+     "rebalance_days": 21,
+     "vol_target": 0.2,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": null,
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "ridge",
+     "features": [
+      "credit_mom21",
+      "curve_10y3m",
+      "dxy_mom21",
+      "rev_1",
+      "rev_5",
+      "rv21",
+      "vix_chg21",
+      "vix_pct",
+      "vol_of_vol",
+      "xs_mom_21",
+      "xs_mom_63",
+      "xs_rs_sector"
+     ],
+     "horizon": 63,
+     "params": {
+      "alpha": 10.0
+     },
+     "refit_days": 63,
+     "train_window": 1260
+    }
+   },
+   "hash": "a6cfe279c944",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 12,
+     "n_short": 5,
+     "rebalance_days": 5,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.05,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "ridge",
+     "features": [
+      "bb_z",
+      "dvol_z",
+      "ema50_200",
+      "mkt_vol_ratio",
+      "mom_126",
+      "mom_12_1",
+      "us10y",
+      "us10y_chg21",
+      "vix_pct",
+      "xs_disp_63",
+      "xs_mom_21",
+      "xs_rs_sector"
+     ],
+     "horizon": 63,
+     "params": {
+      "alpha": 10.0
+     },
+     "refit_days": 126
+    }
+   },
+   "hash": "4675a0b5d324",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 1,
+     "n_short": 7,
+     "rebalance_days": 5,
+     "vol_target": 0.1,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": null,
+     "regime_scale": 0.5,
+     "stop_loss": 0.05,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "logistic",
+     "features": [
+      "credit_mom21",
+      "mom_63",
+      "rev_1",
+      "rev_5",
+      "rv21",
+      "xs_mom_21",
+      "xs_rs_sector"
+     ],
+     "horizon": 21,
+     "params": {
+      "C": 0.1
+     },
+     "refit_days": 252,
+     "train_window": 1260
+    }
+   },
+   "hash": "8aae86872dd5",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 10,
+     "n_short": 0,
+     "rebalance_days": 5,
+     "vol_target": 0.15,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": null,
+     "regime_scale": 0.5,
+     "stop_loss": 0.15,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 5,
       "trend_gate": true
      },
      "refit_days": 63
+    }
+   },
+   "hash": "a47f9cd2b9e4",
+   "op": "mutate",
+   "parent_hash": "c18f97120e2b"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 11,
+     "n_short": 2,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.05,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "hgb",
+     "features": [
+      "curve_chg21",
+      "ema_cross",
+      "mom_126",
+      "mom_252",
+      "mom_5",
+      "px_ema200",
+      "rs_sector",
+      "seasonality",
+      "us10y"
+     ],
+     "horizon": 21,
+     "params": {
+      "learning_rate": 0.05,
+      "max_depth": 3,
+      "max_iter": 100,
+      "min_samples_leaf": 100
+     },
+     "refit_days": 126
     },
     "signal_bear": {
      "family": "hgb",
      "features": [
-      "bb_z",
-      "credit_mom21",
       "curve_chg21",
-      "dvol_z",
-      "mom_126",
-      "mom_252",
+      "mom_10",
       "mom_63",
       "px_ema200",
-      "us10y_chg21",
-      "vix_chg21",
-      "vix_pct",
-      "vol_of_vol",
+      "rev_1",
+      "rev_5",
+      "vol_ratio",
+      "vol_regime",
       "xs_disp_63",
       "xs_mom_21"
+     ],
+     "horizon": 63,
+     "params": {
+      "learning_rate": 0.03,
+      "max_depth": 2,
+      "max_iter": 200,
+      "min_samples_leaf": 100
+     },
+     "refit_days": 126,
+     "train_window": 504
+    }
+   },
+   "hash": "380968a154f1",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 9,
+     "n_short": 1,
+     "rebalance_days": 5,
+     "vol_target": 0.1,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": 0.15,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.5,
+     "stop_loss": null,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "ridge",
+     "features": [
+      "ema_cross",
+      "mkt_vol_ratio",
+      "mom_5",
+      "rev_5",
+      "rv21",
+      "vix_pct",
+      "vol_regime"
+     ],
+     "horizon": 63,
+     "params": {
+      "alpha": 1.0
+     },
+     "refit_days": 126,
+     "train_window": 2520
+    }
+   },
+   "hash": "b4e3f51e71c0",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 4,
+     "n_short": 1,
+     "rebalance_days": 1,
+     "vol_target": 0.2,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": null,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "logistic",
+     "features": [
+      "curve_10y3m",
+      "curve_chg21",
+      "mom_63",
+      "rs_sector",
+      "vix_chg21",
+      "vol_of_vol",
+      "vol_ratio"
+     ],
+     "horizon": 63,
+     "params": {
+      "C": 10.0
+     },
+     "refit_days": 126
+    }
+   },
+   "hash": "5e76a9a8b93f",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 7,
+     "n_short": 7,
+     "rebalance_days": 21,
+     "vol_target": 0.15,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": null,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "hgb",
+     "features": [
+      "curve_chg21",
+      "rev_1",
+      "rev_5",
+      "rs_spy",
+      "us10y",
+      "xs_disp_63",
+      "xs_rs_sector"
      ],
      "horizon": 10,
      "params": {
       "learning_rate": 0.05,
+      "max_depth": 2,
+      "max_iter": 100,
+      "min_samples_leaf": 300
+     },
+     "refit_days": 252,
+     "train_window": 2520
+    }
+   },
+   "hash": "8233baeb45ff",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 11,
+     "n_short": 1,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.15,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 10,
+     "params": {
+      "lookback": 5,
+      "trend_gate": true
+     },
+     "refit_days": 126
+    }
+   },
+   "hash": "e72b19b56d2d",
+   "op": "mutate",
+   "parent_hash": "60a4d8a40805"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 2,
+     "n_short": 4,
+     "rebalance_days": 1,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.15,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.15,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "ridge",
+     "features": [
+      "bb_z",
+      "dxy_mom21",
+      "mom_10",
+      "mom_21",
+      "mom_252",
+      "mom_5",
+      "seasonality",
+      "vix_pct",
+      "vol_of_vol",
+      "xs_mom_21",
+      "xs_rs_spy"
+     ],
+     "horizon": 21,
+     "params": {
+      "alpha": 1.0
+     },
+     "refit_days": 126
+    },
+    "signal_bear": {
+     "family": "mom_rule",
+     "features": [],
+     "horizon": 10,
+     "params": {
+      "lookback": 252,
+      "skip": 0
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "4ae7a511b768",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 6,
+     "n_short": 1,
+     "rebalance_days": 1,
+     "vol_target": 0.15,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.15,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "logistic",
+     "features": [
+      "mom_12_1",
+      "px_ema50",
+      "rsi",
+      "xs_mom_63"
+     ],
+     "horizon": 5,
+     "params": {
+      "C": 1.0
+     },
+     "refit_days": 252
+    }
+   },
+   "hash": "d4a99422b638",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 5,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "mom_rule",
+     "features": [],
+     "horizon": 10,
+     "params": {
+      "lookback": 126,
+      "skip": 5
+     },
+     "refit_days": 126
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "c43e182dd1ab",
+   "op": "mutate",
+   "parent_hash": "39a8973c39b2"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 1,
+     "n_short": 4,
+     "rebalance_days": 21,
+     "vol_target": 0.2,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.15,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.05,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "hgb",
+     "features": [
+      "bb_z",
+      "mkt_vol_ratio",
+      "mom_12_1",
+      "mom_252",
+      "vix_pct",
+      "xs_mom_21"
+     ],
+     "horizon": 63,
+     "params": {
+      "learning_rate": 0.1,
+      "max_depth": 4,
+      "max_iter": 150,
+      "min_samples_leaf": 400
+     },
+     "refit_days": 126,
+     "train_window": 1260
+    }
+   },
+   "hash": "4ac136bbb4a7",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 8,
+     "n_short": 7,
+     "rebalance_days": 5,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.1,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": null,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 5,
+     "params": {
+      "lookback": 5,
+      "trend_gate": false
+     },
+     "refit_days": 126
+    }
+   },
+   "hash": "0a5688602f3b",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 12,
+     "n_short": 8,
+     "rebalance_days": 21,
+     "vol_target": 0.2,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.1,
+     "regime_filter": null,
+     "regime_scale": 0.0,
+     "stop_loss": null,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "ridge",
+     "features": [
+      "bb_z",
+      "curve_10y3m",
+      "mkt_vol_ratio",
+      "mom_10",
+      "mom_63",
+      "rv21",
+      "us10y",
+      "us10y_chg21",
+      "vix_pct",
+      "vol_of_vol",
+      "xs_mom_126"
+     ],
+     "horizon": 63,
+     "params": {
+      "alpha": 1.0
+     },
+     "refit_days": 252,
+     "train_window": 2520
+    }
+   },
+   "hash": "50c0695a55a4",
+   "op": "mutate",
+   "parent_hash": "e0aa3398f911"
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 10,
+     "n_short": 8,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.0,
+     "stop_loss": 0.05,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "logistic",
+     "features": [
+      "mkt_breadth_200",
+      "mkt_vol_ratio",
+      "mom_10",
+      "mom_21",
+      "rs_sector",
+      "us10y_chg21",
+      "vol_regime"
+     ],
+     "horizon": 5,
+     "params": {
+      "C": 10.0
+     },
+     "refit_days": 63,
+     "train_window": 504
+    },
+    "signal_bear": {
+     "family": "hgb",
+     "features": [
+      "curve_10y3m",
+      "ema50_200",
+      "mom_126",
+      "mom_12_1",
+      "px_ema200",
+      "px_ema50",
+      "rsi",
+      "xs_disp_63",
+      "xs_mom_63"
+     ],
+     "horizon": 21,
+     "params": {
+      "learning_rate": 0.03,
+      "max_depth": 4,
+      "max_iter": 100,
+      "min_samples_leaf": 400
+     },
+     "refit_days": 63,
+     "train_window": 504
+    }
+   },
+   "hash": "ef6478933baa",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 6,
+     "n_short": 4,
+     "rebalance_days": 5,
+     "vol_target": null,
+     "weighting": "equal"
+    },
+    "risk": {
+     "dd_limit": 0.15,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.0,
+     "stop_loss": 0.15,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "hgb",
+     "features": [
+      "bb_z",
+      "curve_10y3m",
+      "dxy_mom21",
+      "mkt_vol_ratio",
+      "mom_10",
+      "mom_12_1",
+      "mom_252",
+      "mom_63",
+      "px_ema200",
+      "vix",
+      "vix_chg21",
+      "vix_pct",
+      "vol_ratio",
+      "vol_regime",
+      "xs_disp_63"
+     ],
+     "horizon": 5,
+     "params": {
+      "learning_rate": 0.03,
       "max_depth": 4,
       "max_iter": 100,
       "min_samples_leaf": 300
      },
      "refit_days": 252,
-     "train_window": 504
+     "train_window": 1260
     }
    },
-   "hash": "eaff0868307c",
-   "op": "mutate",
-   "parent_hash": "df971f0456a0"
+   "hash": "f580cdb3936d",
+   "op": "immigrant",
+   "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 0.6,
-     "n_long": 9,
-     "n_short": 3,
-     "rebalance_days": 5,
+     "gross": 1.0,
+     "n_long": 3,
+     "n_short": 2,
+     "rebalance_days": 21,
      "vol_target": 0.15,
-     "weighting": "inv_vol"
+     "weighting": "score"
     },
     "risk": {
-     "dd_limit": null,
-     "regime_filter": "vix_pct_80",
+     "dd_limit": 0.15,
+     "regime_filter": null,
      "regime_scale": 0.5,
-     "stop_loss": 0.1,
+     "stop_loss": null,
      "trail_stop": 0.1
     },
     "signal": {
      "family": "mom_rule",
      "features": [],
      "horizon": 10,
-     "params": {
-      "lookback": 21,
-      "skip": 5
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "a5ad4b01b062",
-   "op": "mutate",
-   "parent_hash": "f89c4e566fa9"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "mom_rule",
-     "features": [],
-     "horizon": 21,
      "params": {
       "lookback": 252,
       "skip": 0
@@ -1310,172 +1802,32 @@
      "refit_days": 63
     }
    },
-   "hash": "fe34badbe62b",
-   "op": "mutate",
-   "parent_hash": "4b899e1cb71e"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 12,
-     "n_short": 1,
-     "rebalance_days": 21,
-     "vol_target": 0.2,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.15,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.15,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "hgb",
-     "features": [
-      "credit_mom21",
-      "dvol_z",
-      "mom_10",
-      "mom_252",
-      "px_ema200",
-      "vix_pct"
-     ],
-     "horizon": 10,
-     "params": {
-      "learning_rate": 0.05,
-      "max_depth": 2,
-      "max_iter": 200,
-      "min_samples_leaf": 200
-     },
-     "refit_days": 63,
-     "train_window": 1260
-    }
-   },
-   "hash": "984b1080d549",
-   "op": "mutate",
-   "parent_hash": "2439c8a95002"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.3,
-     "n_long": 8,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.15,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": 0.15,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.15,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "ridge",
-     "features": [
-      "bb_z",
-      "dvol_z",
-      "mkt_breadth_200",
-      "mom_63",
-      "rs_sector",
-      "vix_pct",
-      "vol_regime"
-     ],
-     "horizon": 5,
-     "params": {
-      "alpha": 1.0
-     },
-     "refit_days": 63,
-     "train_window": 2520
-    },
-    "signal_bear": {
-     "family": "logistic",
-     "features": [
-      "curve_10y3m",
-      "mom_5",
-      "xs_rs_spy"
-     ],
-     "horizon": 5,
-     "params": {
-      "C": 0.01
-     },
-     "refit_days": 252
-    }
-   },
-   "hash": "0415aeeaf4a8",
+   "hash": "9a0f491b419c",
    "op": "immigrant",
    "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 1.3,
-     "n_long": 10,
-     "n_short": 1,
-     "rebalance_days": 5,
-     "vol_target": 0.15,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.2,
-     "regime_filter": "vix_pct_80",
-     "regime_scale": 0.5,
-     "stop_loss": null,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "meanrev_rule",
-     "features": [],
-     "horizon": 63,
-     "params": {
-      "lookback": 5,
-      "trend_gate": true
-     },
-     "refit_days": 252
-    }
-   },
-   "hash": "c8310b19a78d",
-   "op": "mutate",
-   "parent_hash": "9ade8b25cfd3"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.3,
-     "n_long": 5,
-     "n_short": 0,
-     "rebalance_days": 1,
+     "gross": 1.0,
+     "n_long": 4,
+     "n_short": 7,
+     "rebalance_days": 21,
      "vol_target": 0.1,
      "weighting": "equal"
     },
     "risk": {
      "dd_limit": null,
      "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
+     "regime_scale": 0.5,
      "stop_loss": 0.1,
-     "trail_stop": 0.2
+     "trail_stop": null
     },
     "signal": {
-     "family": "mom_rule",
-     "features": [],
-     "horizon": 10,
-     "params": {
-      "lookback": 126,
-      "skip": 5
-     },
-     "refit_days": 126
-    },
-    "signal_bear": {
      "family": "meanrev_rule",
      "features": [],
-     "horizon": 21,
+     "horizon": 63,
      "params": {
       "lookback": 10,
       "trend_gate": false
@@ -1483,473 +1835,281 @@
      "refit_days": 63
     }
    },
-   "hash": "39a8973c39b2",
-   "op": "crossover",
-   "parent_hash": [
-    "72a4a79ab77c",
-    "21d7cd36dc45"
-   ]
+   "hash": "9b083d7a8e49",
+   "op": "immigrant",
+   "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 0.6,
-     "n_long": 12,
-     "n_short": 7,
-     "rebalance_days": 1,
+     "n_long": 7,
+     "n_short": 6,
+     "rebalance_days": 5,
      "vol_target": 0.2,
-     "weighting": "inv_vol"
+     "weighting": "score"
     },
     "risk": {
-     "dd_limit": 0.1,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "logistic",
-     "features": [
-      "mom_10",
-      "rs_sector",
-      "vix_chg21"
-     ],
-     "horizon": 5,
-     "params": {
-      "C": 0.1
-     },
-     "refit_days": 126,
-     "train_window": 1260
-    }
-   },
-   "hash": "fffb12c3c27d",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 11,
-     "n_short": 4,
-     "rebalance_days": 1,
-     "vol_target": null,
-     "weighting": "equal"
-    },
-    "risk": {
-     "dd_limit": 0.1,
+     "dd_limit": null,
      "regime_filter": "spy_200dma",
      "regime_scale": 0.5,
-     "stop_loss": null,
+     "stop_loss": 0.05,
      "trail_stop": 0.2
     },
     "signal": {
      "family": "ridge",
      "features": [
-      "credit_mom21",
-      "curve_10y3m",
-      "dxy_mom21",
-      "ema_cross",
-      "mom_5",
-      "rev_1",
-      "rev_5",
-      "rs_spy",
-      "rv21",
-      "us10y",
-      "us10y_chg21",
-      "vix_chg21",
-      "vix_pct",
-      "vol_of_vol",
-      "xs_disp_63"
+      "curve_chg21",
+      "ema50_200",
+      "px_ema50",
+      "xs_mom_126"
      ],
      "horizon": 63,
      "params": {
-      "alpha": 1.0
-     },
-     "refit_days": 126,
-     "train_window": 1260
-    }
-   },
-   "hash": "6b86b805732f",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 6,
-     "n_short": 6,
-     "rebalance_days": 21,
-     "vol_target": 0.1,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.1,
-     "regime_filter": null,
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "logistic",
-     "features": [
-      "credit_mom21",
-      "dvol_z",
-      "mom_63",
-      "xs_rs_spy"
-     ],
-     "horizon": 21,
-     "params": {
-      "C": 1.0
-     },
-     "refit_days": 63,
-     "train_window": 504
-    }
-   },
-   "hash": "9291b9bbc3bd",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 11,
-     "n_short": 3,
-     "rebalance_days": 21,
-     "vol_target": 0.15,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "vix_pct_80",
-     "regime_scale": 0.0,
-     "stop_loss": 0.15,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "hgb",
-     "features": [
-      "dvol_z",
-      "dxy_mom21",
-      "mom_10",
-      "mom_126",
-      "mom_12_1",
-      "mom_252",
-      "px_ema200",
-      "seasonality",
-      "us10y",
-      "vol_ratio"
-     ],
-     "horizon": 5,
-     "params": {
-      "learning_rate": 0.05,
-      "max_depth": 2,
-      "max_iter": 250,
-      "min_samples_leaf": 400
-     },
-     "refit_days": 63,
-     "train_window": 1260
-    }
-   },
-   "hash": "3b4e5a35ada3",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 12,
-     "n_short": 8,
-     "rebalance_days": 21,
-     "vol_target": 0.2,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.1,
-     "regime_filter": null,
-     "regime_scale": 0.0,
-     "stop_loss": null,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "ridge",
-     "features": [
-      "bb_z",
-      "curve_10y3m",
-      "mkt_vol_ratio",
-      "mom_10",
-      "mom_63",
-      "rv21",
-      "us10y",
-      "us10y_chg21",
-      "vix_pct",
-      "vol_of_vol",
-      "xs_mom_126"
-     ],
-     "horizon": 21,
-     "params": {
-      "alpha": 1.0
-     },
-     "refit_days": 252,
-     "train_window": 2520
-    }
-   },
-   "hash": "e0aa3398f911",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 12,
-     "n_short": 1,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "mom_rule",
-     "features": [],
-     "horizon": 10,
-     "params": {
-      "lookback": 126,
-      "skip": 5
+      "alpha": 100.0
      },
      "refit_days": 126
     }
    },
-   "hash": "8d4cdf277311",
-   "op": "mutate",
-   "parent_hash": "21d7cd36dc45"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.3,
-     "n_long": 5,
-     "n_short": 4,
-     "rebalance_days": 5,
-     "vol_target": 0.15,
-     "weighting": "equal"
-    },
-    "risk": {
-     "dd_limit": 0.1,
-     "regime_filter": null,
-     "regime_scale": 0.5,
-     "stop_loss": 0.15,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "logistic",
-     "features": [
-      "bb_z",
-      "ema_cross",
-      "mkt_vol_ratio",
-      "mom_126",
-      "mom_12_1",
-      "mom_252",
-      "mom_63",
-      "rev_1",
-      "rev_5",
-      "us10y",
-      "us10y_chg21",
-      "vix",
-      "xs_rs_sector",
-      "xs_rs_spy"
-     ],
-     "horizon": 21,
-     "params": {
-      "C": 0.1
-     },
-     "refit_days": 63,
-     "train_window": 1260
-    }
-   },
-   "hash": "0ae24f1dd63a",
+   "hash": "5d3d68789573",
    "op": "immigrant",
    "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 1.3,
-     "n_long": 10,
+     "gross": 0.6,
+     "n_long": 2,
      "n_short": 7,
-     "rebalance_days": 5,
-     "vol_target": 0.2,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.2,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.15,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "hgb",
-     "features": [
-      "mkt_breadth_200",
-      "mkt_vol_ratio",
-      "mom_10",
-      "mom_12_1",
-      "mom_21",
-      "rev_1",
-      "rs_sector",
-      "rs_spy",
-      "vol_regime"
-     ],
-     "horizon": 10,
-     "params": {
-      "learning_rate": 0.1,
-      "max_depth": 2,
-      "max_iter": 150,
-      "min_samples_leaf": 400
-     },
-     "refit_days": 63,
-     "train_window": 504
-    }
-   },
-   "hash": "acf4f782b25d",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 10,
-     "n_short": 0,
-     "rebalance_days": 5,
-     "vol_target": 0.15,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": null,
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "meanrev_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {
-      "lookback": 5,
-      "trend_gate": true
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "c18f97120e2b",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.0,
-     "n_long": 7,
-     "n_short": 8,
-     "rebalance_days": 5,
-     "vol_target": 0.15,
+     "rebalance_days": 1,
+     "vol_target": null,
      "weighting": "score"
     },
     "risk": {
      "dd_limit": 0.15,
      "regime_filter": "vix_pct_80",
      "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "ridge",
-     "features": [
-      "curve_chg21",
-      "dvol_z",
-      "ema50_200",
-      "mom_126",
-      "mom_12_1",
-      "mom_21",
-      "mom_5",
-      "vix",
-      "vix_chg21",
-      "vix_pct",
-      "xs_rs_sector"
-     ],
-     "horizon": 21,
-     "params": {
-      "alpha": 100.0
-     },
-     "refit_days": 126,
-     "train_window": 504
-    }
-   },
-   "hash": "3f6d9906f60d",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.3,
-     "n_long": 11,
-     "n_short": 4,
-     "rebalance_days": 21,
-     "vol_target": 0.15,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": null,
-     "trail_stop": 0.1
+     "stop_loss": 0.05,
+     "trail_stop": null
     },
     "signal": {
      "family": "logistic",
      "features": [
+      "bb_z",
+      "rv21",
+      "vix",
+      "vol_ratio",
+      "xs_rs_spy"
+     ],
+     "horizon": 10,
+     "params": {
+      "C": 0.1
+     },
+     "refit_days": 126,
+     "train_window": 504
+    },
+    "signal_bear": {
+     "family": "ridge",
+     "features": [
+      "credit_mom21",
+      "curve_chg21",
+      "ema50_200",
       "mkt_vol_ratio",
-      "rev_1",
-      "vix_pct",
+      "mom_12_1",
+      "mom_63",
+      "px_ema200",
+      "rs_sector",
+      "seasonality",
+      "vol_of_vol",
+      "vol_regime",
+      "xs_mom_126",
       "xs_mom_63"
      ],
      "horizon": 63,
      "params": {
-      "C": 0.01
+      "alpha": 100.0
+     },
+     "refit_days": 252,
+     "train_window": 1260
+    }
+   },
+   "hash": "7278eb8ddb90",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 7,
+     "n_short": 8,
+     "rebalance_days": 5,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.0,
+     "stop_loss": null,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "hgb",
+     "features": [
+      "mom_21",
+      "mom_252",
+      "us10y",
+      "vol_regime",
+      "xs_mom_21",
+      "xs_mom_63"
+     ],
+     "horizon": 5,
+     "params": {
+      "learning_rate": 0.05,
+      "max_depth": 3,
+      "max_iter": 200,
+      "min_samples_leaf": 200
+     },
+     "refit_days": 63,
+     "train_window": 2520
+    },
+    "signal_bear": {
+     "family": "ridge",
+     "features": [
+      "bb_z",
+      "mom_10",
+      "mom_252",
+      "mom_63",
+      "us10y_chg21",
+      "xs_rs_sector"
+     ],
+     "horizon": 10,
+     "params": {
+      "alpha": 0.1
+     },
+     "refit_days": 126,
+     "train_window": 504
+    }
+   },
+   "hash": "9124a5a82fd0",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 5,
+     "n_short": 1,
+     "rebalance_days": 1,
+     "vol_target": null,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.5,
+     "stop_loss": 0.05,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "mom_rule",
+     "features": [],
+     "horizon": 63,
+     "params": {
+      "lookback": 252,
+      "skip": 21
      },
      "refit_days": 252
     }
    },
-   "hash": "09f1dbca238b",
-   "op": "mutate",
-   "parent_hash": "62b866ec937c"
+   "hash": "d0f82f5a243b",
+   "op": "immigrant",
+   "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 4,
+     "n_short": 8,
+     "rebalance_days": 5,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.15,
+     "regime_filter": null,
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 5,
+     "params": {
+      "lookback": 5,
+      "trend_gate": true
+     },
+     "refit_days": 252
+    }
+   },
+   "hash": "aefbdab00232",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.0,
+     "n_long": 6,
+     "n_short": 2,
+     "rebalance_days": 5,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.15,
+     "regime_filter": null,
+     "regime_scale": 0.5,
+     "stop_loss": null,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "ridge",
+     "features": [
+      "mkt_breadth_200",
+      "mom_10",
+      "mom_252",
+      "px_ema50",
+      "rs_sector",
+      "seasonality",
+      "xs_mom_21",
+      "xs_mom_63",
+      "xs_rs_sector"
+     ],
+     "horizon": 21,
+     "params": {
+      "alpha": 1.0
+     },
+     "refit_days": 126,
+     "train_window": 2520
+    }
+   },
+   "hash": "f308992c42fa",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 1.0,
@@ -1958,93 +2118,6 @@
      "rebalance_days": 21,
      "vol_target": 0.2,
      "weighting": "equal"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "hgb",
-     "features": [
-      "dxy_mom21",
-      "ema_cross",
-      "mom_126",
-      "rev_1",
-      "rsi",
-      "vol_regime",
-      "xs_mom_21"
-     ],
-     "horizon": 10,
-     "params": {
-      "learning_rate": 0.1,
-      "max_depth": 2,
-      "max_iter": 200,
-      "min_samples_leaf": 100
-     },
-     "refit_days": 126,
-     "train_window": 1260
-    }
-   },
-   "hash": "f773b59ec462",
-   "op": "crossover",
-   "parent_hash": [
-    "ce02d8058a36",
-    "5f69e37db5fd"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 1,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "logistic",
-     "features": [
-      "ema50_200",
-      "mom_10",
-      "mom_126",
-      "mom_5",
-      "vol_ratio",
-      "xs_disp_63",
-      "xs_mom_126"
-     ],
-     "horizon": 21,
-     "params": {
-      "C": 0.01
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "6eff4da505e4",
-   "op": "mutate",
-   "parent_hash": "4b899e1cb71e"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 5,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.1,
-     "weighting": "inv_vol"
     },
     "risk": {
      "dd_limit": 0.15,
@@ -2064,23 +2137,176 @@
      "refit_days": 252
     }
    },
-   "hash": "139e895cd583",
+   "hash": "2e9d61515ae2",
+   "op": "crossover",
+   "parent_hash": [
+    "f773b59ec462",
+    "139e895cd583"
+   ]
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 7,
+     "n_short": 6,
+     "rebalance_days": 5,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.1,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "logistic",
+     "features": [
+      "mom_126",
+      "rs_sector",
+      "rsi",
+      "xs_disp_63",
+      "xs_mom_21"
+     ],
+     "horizon": 63,
+     "params": {
+      "C": 0.01
+     },
+     "refit_days": 252,
+     "train_window": 504
+    }
+   },
+   "hash": "d4a0dd26a7f7",
    "op": "immigrant",
    "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
      "gross": 1.0,
-     "n_long": 4,
-     "n_short": 8,
+     "n_long": 7,
+     "n_short": 7,
      "rebalance_days": 5,
-     "vol_target": 0.1,
+     "vol_target": 0.15,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": 0.1,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.5,
+     "stop_loss": 0.15,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "hgb",
+     "features": [
+      "curve_chg21",
+      "us10y_chg21",
+      "xs_mom_21"
+     ],
+     "horizon": 21,
+     "params": {
+      "learning_rate": 0.05,
+      "max_depth": 3,
+      "max_iter": 300,
+      "min_samples_leaf": 300
+     },
+     "refit_days": 63,
+     "train_window": 1260
+    }
+   },
+   "hash": "6b69b76b2d42",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 12,
+     "n_short": 6,
+     "rebalance_days": 21,
+     "vol_target": null,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": 0.2,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.0,
+     "stop_loss": 0.15,
+     "trail_stop": 0.1
+    },
+    "signal": {
+     "family": "mom_rule",
+     "features": [],
+     "horizon": 5,
+     "params": {
+      "lookback": 21,
+      "skip": 5
+     },
+     "refit_days": 252
+    }
+   },
+   "hash": "27b0c3111dcc",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 2,
+     "n_short": 1,
+     "rebalance_days": 1,
+     "vol_target": null,
      "weighting": "equal"
     },
     "risk": {
-     "dd_limit": 0.15,
+     "dd_limit": null,
+     "regime_filter": null,
+     "regime_scale": 0.5,
+     "stop_loss": 0.15,
+     "trail_stop": null
+    },
+    "signal": {
+     "family": "ridge",
+     "features": [
+      "dxy_mom21",
+      "mom_10",
+      "mom_126",
+      "mom_63",
+      "vol_regime"
+     ],
+     "horizon": 10,
+     "params": {
+      "alpha": 1.0
+     },
+     "refit_days": 252
+    }
+   },
+   "hash": "8a4be5a0458e",
+   "op": "immigrant",
+   "parent_hash": ""
+  },
+  {
+   "birth_gen": 42,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 1,
+     "n_short": 3,
+     "rebalance_days": 5,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
      "regime_filter": "spy_200dma",
      "regime_scale": 0.5,
      "stop_loss": null,
@@ -2089,342 +2315,138 @@
     "signal": {
      "family": "mom_rule",
      "features": [],
-     "horizon": 21,
+     "horizon": 10,
      "params": {
-      "lookback": 252,
-      "skip": 0
-     },
-     "refit_days": 252
-    }
-   },
-   "hash": "d72324d8213e",
-   "op": "mutate",
-   "parent_hash": "dceafaf315e3"
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 9,
-     "n_short": 7,
-     "rebalance_days": 5,
-     "vol_target": 0.1,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.2,
-     "regime_filter": null,
-     "regime_scale": 0.5,
-     "stop_loss": 0.05,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "ridge",
-     "features": [
-      "credit_mom21",
-      "ema_cross",
-      "rv21",
-      "vol_ratio"
-     ],
-     "horizon": 63,
-     "params": {
-      "alpha": 0.1
-     },
-     "refit_days": 126,
-     "train_window": 2520
-    }
-   },
-   "hash": "0811795629d8",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 1.3,
-     "n_long": 6,
-     "n_short": 4,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": 0.15,
-     "regime_filter": "vix_pct_80",
-     "regime_scale": 0.0,
-     "stop_loss": 0.15,
-     "trail_stop": 0.1
-    },
-    "signal": {
-     "family": "hgb",
-     "features": [
-      "mom_5",
-      "vix",
-      "vix_pct"
-     ],
-     "horizon": 21,
-     "params": {
-      "learning_rate": 0.03,
-      "max_depth": 3,
-      "max_iter": 250,
-      "min_samples_leaf": 400
+      "lookback": 21,
+      "skip": 21
      },
      "refit_days": 126
     }
    },
-   "hash": "facce3dc08ab",
+   "hash": "ba421543fc54",
    "op": "immigrant",
    "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
+     "gross": 1.0,
+     "n_long": 5,
+     "n_short": 2,
+     "rebalance_days": 1,
      "vol_target": null,
      "weighting": "score"
     },
     "risk": {
-     "dd_limit": 0.15,
+     "dd_limit": 0.2,
      "regime_filter": null,
-     "regime_scale": 0.0,
+     "regime_scale": 0.5,
      "stop_loss": null,
      "trail_stop": 0.1
     },
     "signal": {
      "family": "meanrev_rule",
      "features": [],
-     "horizon": 63,
+     "horizon": 10,
      "params": {
       "lookback": 5,
-      "trend_gate": false
+      "trend_gate": true
      },
-     "refit_days": 252
+     "refit_days": 126
     }
    },
-   "hash": "75298eeaa92c",
-   "op": "crossover",
-   "parent_hash": [
-    "6e02ebe6e7b6",
-    "75298eeaa92c"
-   ]
+   "hash": "91b9edb60174",
+   "op": "immigrant",
+   "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 1.0,
-     "n_long": 8,
-     "n_short": 2,
-     "rebalance_days": 21,
-     "vol_target": 0.2,
-     "weighting": "equal"
+     "gross": 0.8,
+     "n_long": 10,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": null,
+     "weighting": "score"
     },
     "risk": {
-     "dd_limit": 0.1,
+     "dd_limit": null,
      "regime_filter": null,
-     "regime_scale": 0.0,
-     "stop_loss": 0.15,
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
      "trail_stop": 0.1
     },
     "signal": {
-     "family": "hgb",
+     "family": "logistic",
      "features": [
-      "dxy_mom21",
-      "ema_cross",
-      "mom_126",
-      "rev_1",
-      "rsi",
-      "vol_regime",
+      "curve_10y3m",
+      "ema50_200",
+      "mom_12_1",
+      "vix_chg21",
+      "vol_of_vol",
+      "xs_disp_63",
       "xs_mom_21"
      ],
      "horizon": 10,
      "params": {
-      "learning_rate": 0.1,
-      "max_depth": 2,
-      "max_iter": 200,
-      "min_samples_leaf": 100
+      "C": 0.1
      },
-     "refit_days": 126,
-     "train_window": 1260
+     "refit_days": 252,
+     "train_window": 504
     }
    },
-   "hash": "8b86d33e8903",
-   "op": "crossover",
-   "parent_hash": [
-    "d7643846895a",
-    "5f69e37db5fd"
-   ]
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 4,
-     "n_short": 1,
-     "rebalance_days": 21,
-     "vol_target": 0.15,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": 0.2,
-     "regime_filter": "vix_pct_80",
-     "regime_scale": 0.5,
-     "stop_loss": 0.05,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "mom_rule",
-     "features": [],
-     "horizon": 10,
-     "params": {
-      "lookback": 21,
-      "skip": 0
-     },
-     "refit_days": 252
-    }
-   },
-   "hash": "7c26615736ff",
+   "hash": "e813e5c6e970",
    "op": "immigrant",
    "parent_hash": ""
   },
   {
-   "birth_gen": 41,
+   "birth_gen": 42,
    "genome": {
     "portfolio": {
-     "gross": 0.6,
-     "n_long": 11,
+     "gross": 1.3,
+     "n_long": 1,
      "n_short": 3,
-     "rebalance_days": 1,
-     "vol_target": 0.15,
+     "rebalance_days": 5,
+     "vol_target": null,
      "weighting": "equal"
     },
     "risk": {
-     "dd_limit": 0.2,
-     "regime_filter": null,
-     "regime_scale": 0.5,
+     "dd_limit": null,
+     "regime_filter": "vix_pct_80",
+     "regime_scale": 0.0,
      "stop_loss": 0.05,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "meanrev_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {
-      "lookback": 21,
-      "trend_gate": true
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "2dfe3b7400d5",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": 0.2,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": null,
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": null
-    },
-    "signal": {
-     "family": "ridge",
-     "features": [
-      "credit_mom21",
-      "curve_chg21",
-      "dxy_mom21",
-      "mom_10",
-      "mom_126",
-      "mom_12_1",
-      "mom_63",
-      "rev_5",
-      "rs_sector",
-      "rsi",
-      "rv21",
-      "seasonality",
-      "us10y_chg21",
-      "vix_chg21",
-      "vol_of_vol"
-     ],
-     "horizon": 21,
-     "params": {
-      "alpha": 10.0
-     },
-     "refit_days": 63,
-     "train_window": 2520
-    }
-   },
-   "hash": "2905eba65021",
-   "op": "immigrant",
-   "parent_hash": ""
-  },
-  {
-   "birth_gen": 41,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 8,
-     "rebalance_days": 21,
-     "vol_target": 0.2,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
      "trail_stop": 0.2
     },
     "signal": {
      "family": "ridge",
      "features": [
       "bb_z",
-      "dxy_mom21",
       "ema_cross",
-      "px_ema200",
-      "rev_1",
-      "rev_5",
-      "vix_chg21"
+      "vix_pct",
+      "xs_rs_spy"
      ],
-     "horizon": 5,
+     "horizon": 10,
      "params": {
-      "alpha": 10.0
+      "alpha": 1.0
      },
-     "refit_days": 126,
-     "train_window": 2520
+     "refit_days": 63,
+     "train_window": 1260
     }
    },
-   "hash": "3b4b54fec3b7",
+   "hash": "1048fa2fd0ed",
    "op": "immigrant",
    "parent_hash": ""
   }
  ],
- "generation": 41,
+ "generation": 42,
  "note": "REWRITTEN every generation: this is the generation POINTER, not a record. Every genome in it is in the trial ledger, which is append-only; this file is regenerable from that ledger.",
  "op_counts": {
-  "crossover": 12,
+  "crossover": 7,
   "elite": 4,
-  "immigrant": 24,
-  "mutate": 24
+  "immigrant": 30,
+  "mutate": 23
  },
  "size": 64
 }

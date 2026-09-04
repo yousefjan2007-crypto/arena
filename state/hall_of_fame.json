@@ -39,41 +39,6 @@
    "sharpe_prevault": 1.2620974940132008
   },
   {
-   "birth_gen": 24,
-   "family": "seasonal_rule",
-   "generation": 24,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 10,
-     "params": {},
-     "refit_days": 63
-    }
-   },
-   "hash": "ee97a2e76cf9",
-   "n_days_prevault": 5285,
-   "op": "mutate",
-   "parent_hash": "4b899e1cb71e",
-   "score": 1.2620967969535613,
-   "sharpe_prevault": 1.2620967969535613
-  },
-  {
    "birth_gen": 16,
    "family": "seasonal_rule",
    "generation": 27,
@@ -111,7 +76,7 @@
   {
    "birth_gen": 40,
    "family": "seasonal_rule",
-   "generation": 40,
+   "generation": 41,
    "genome": {
     "portfolio": {
      "gross": 1.3,
@@ -148,13 +113,13 @@
    },
    "hash": "72a4a79ab77c",
    "n_days_prevault": 6041,
-   "op": "crossover",
+   "op": "elite",
    "parent_hash": [
     "011f081775d5",
     "ba5b892b315e"
    ],
-   "score": 1.096817568190125,
-   "sharpe_prevault": 1.24635395943281
+   "score": 1.0968529992924425,
+   "sharpe_prevault": 1.245788483223016
   },
   {
    "birth_gen": 19,
@@ -190,6 +155,51 @@
    "parent_hash": "a0a007afe3f1",
    "score": 1.2373183172483695,
    "sharpe_prevault": 1.2373183172483695
+  },
+  {
+   "birth_gen": 41,
+   "family": "seasonal_rule",
+   "generation": 41,
+   "genome": {
+    "portfolio": {
+     "gross": 1.3,
+     "n_long": 5,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "score"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 63
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "28f30596afd9",
+   "n_days_prevault": 6041,
+   "op": "mutate",
+   "parent_hash": "72a4a79ab77c",
+   "score": 1.1336413072722498,
+   "sharpe_prevault": 1.2116330442602512
   },
   {
    "birth_gen": 26,
