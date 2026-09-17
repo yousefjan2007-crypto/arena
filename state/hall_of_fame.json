@@ -271,9 +271,57 @@
    "sharpe_prevault": 1.2991396963078812
   },
   {
-   "birth_gen": 66,
+   "birth_gen": 67,
    "family": "seasonal_rule",
-   "generation": 66,
+   "generation": 67,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 4,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.0,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 10,
+     "params": {},
+     "refit_days": 63
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "01dcbb27040c",
+   "n_days_prevault": 6041,
+   "op": "crossover",
+   "parent_hash": [
+    "bbc8e7c7d06f",
+    "633c00eee667"
+   ],
+   "score": 1.1397787584048387,
+   "sharpe_prevault": 1.2989500159554488
+  },
+  {
+   "birth_gen": 67,
+   "family": "seasonal_rule",
+   "generation": 67,
    "genome": {
     "portfolio": {
      "gross": 0.6,
@@ -310,8 +358,11 @@
    },
    "hash": "cbd61111ceb8",
    "n_days_prevault": 6041,
-   "op": "mutate",
-   "parent_hash": "304e921105f9",
+   "op": "crossover",
+   "parent_hash": [
+    "cbd61111ceb8",
+    "bfbec994f25c"
+   ],
    "score": 1.1397787584048387,
    "sharpe_prevault": 1.2989500159554488
   },
@@ -404,44 +455,6 @@
    "parent_hash": "cbd61111ceb8",
    "score": 1.1286860709158388,
    "sharpe_prevault": 1.2629070926628732
-  },
-  {
-   "birth_gen": 23,
-   "family": "seasonal_rule",
-   "generation": 23,
-   "genome": {
-    "portfolio": {
-     "gross": 0.8,
-     "n_long": 11,
-     "n_short": 0,
-     "rebalance_days": 21,
-     "vol_target": null,
-     "weighting": "score"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 63,
-     "params": {},
-     "refit_days": 63
-    }
-   },
-   "hash": "f6534cfed801",
-   "n_days_prevault": 5285,
-   "op": "crossover",
-   "parent_hash": [
-    "4b899e1cb71e",
-    "4b899e1cb71e"
-   ],
-   "score": 1.2620974940132008,
-   "sharpe_prevault": 1.2620974940132008
   }
  ],
  "note": "REWRITTEN every generation: a ranked CACHE of the best pre-vault Sharpes on record, regenerable from the trial ledger and the returns artifacts. Scores are the LATEST evaluation of each genome, not its best ever \u2014 see evolution.update_hall_of_fame.",
