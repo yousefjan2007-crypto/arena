@@ -94,6 +94,51 @@
    "sharpe_prevault": 1.3105716251322113
   },
   {
+   "birth_gen": 73,
+   "family": "seasonal_rule",
+   "generation": 73,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 4,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 63,
+     "params": {},
+     "refit_days": 63
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "7f05a1154176",
+   "n_days_prevault": 6041,
+   "op": "mutate",
+   "parent_hash": "086f728ca68a",
+   "score": 1.1298066138080964,
+   "sharpe_prevault": 1.3105716251322113
+  },
+  {
    "birth_gen": 49,
    "family": "seasonal_rule",
    "generation": 49,
@@ -408,51 +453,6 @@
    "n_days_prevault": 6041,
    "op": "mutate",
    "parent_hash": "cbd61111ceb8",
-   "score": 1.1395277930027128,
-   "sharpe_prevault": 1.2989513840982305
-  },
-  {
-   "birth_gen": 69,
-   "family": "seasonal_rule",
-   "generation": 69,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 4,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.1,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 252
-    },
-    "signal_bear": {
-     "family": "meanrev_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {
-      "lookback": 10,
-      "trend_gate": false
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "615b00f57be8",
-   "n_days_prevault": 6041,
-   "op": "mutate",
-   "parent_hash": "66198fa15639",
    "score": 1.1395277930027128,
    "sharpe_prevault": 1.2989513840982305
   }
