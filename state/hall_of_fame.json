@@ -46,6 +46,51 @@
    "sharpe_prevault": 1.327445022351577
   },
   {
+   "birth_gen": 83,
+   "family": "seasonal_rule",
+   "generation": 83,
+   "genome": {
+    "portfolio": {
+     "gross": 0.6,
+     "n_long": 4,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.15,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 252
+    },
+    "signal_bear": {
+     "family": "meanrev_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {
+      "lookback": 10,
+      "trend_gate": false
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "eaf88989f23d",
+   "n_days_prevault": 6041,
+   "op": "mutate",
+   "parent_hash": "c16d96ab6c61",
+   "score": 1.1584749338923548,
+   "sharpe_prevault": 1.3125678142399066
+  },
+  {
    "birth_gen": 72,
    "family": "seasonal_rule",
    "generation": 72,
@@ -408,51 +453,6 @@
     "e5fdf56e5606",
     "26852b69a422"
    ],
-   "score": 1.1395277930027128,
-   "sharpe_prevault": 1.2989513840982305
-  },
-  {
-   "birth_gen": 68,
-   "family": "seasonal_rule",
-   "generation": 68,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 4,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.1,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.0,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 126
-    },
-    "signal_bear": {
-     "family": "meanrev_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {
-      "lookback": 10,
-      "trend_gate": false
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "2ecf60ec8870",
-   "n_days_prevault": 6041,
-   "op": "mutate",
-   "parent_hash": "cbd61111ceb8",
    "score": 1.1395277930027128,
    "sharpe_prevault": 1.2989513840982305
   }
