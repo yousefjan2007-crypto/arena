@@ -1,0 +1,47 @@
+{
+ "genome": {
+  "portfolio": {
+   "gross": 0.6,
+   "n_long": 4,
+   "n_short": 0,
+   "rebalance_days": 1,
+   "vol_target": 0.15,
+   "weighting": "inv_vol"
+  },
+  "risk": {
+   "dd_limit": null,
+   "regime_filter": "spy_200dma",
+   "regime_scale": 0.5,
+   "stop_loss": 0.1,
+   "trail_stop": 0.2
+  },
+  "signal": {
+   "family": "seasonal_rule",
+   "features": [],
+   "horizon": 21,
+   "params": {},
+   "refit_days": 252
+  },
+  "signal_bear": {
+   "family": "meanrev_rule",
+   "features": [],
+   "horizon": 21,
+   "params": {
+    "lookback": 10,
+    "trend_gate": false
+   },
+   "refit_days": 63
+  }
+ },
+ "hash": "eaf88989f23d",
+ "lineage": [
+  {
+   "birth_gen": 84,
+   "op": "crossover",
+   "parent_hash": [
+    "eaf88989f23d",
+    "eaf88989f23d"
+   ]
+  }
+ ]
+}
