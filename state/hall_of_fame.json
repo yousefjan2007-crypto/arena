@@ -1,6 +1,65 @@
 {
  "hall_of_fame": [
   {
+   "birth_gen": 103,
+   "family": "seasonal_rule",
+   "generation": 103,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 3,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.1,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": null,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 126
+    },
+    "signal_bear": {
+     "family": "hgb",
+     "features": [
+      "credit_mom21",
+      "curve_10y3m",
+      "mkt_vol_ratio",
+      "mom_21",
+      "mom_63",
+      "rs_sector",
+      "rs_spy",
+      "rsi",
+      "seasonality",
+      "vix",
+      "xs_mom_63"
+     ],
+     "horizon": 10,
+     "params": {
+      "learning_rate": 0.1,
+      "max_depth": 2,
+      "max_iter": 100,
+      "min_samples_leaf": 100
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "7b332e307b52",
+   "n_days_prevault": 6041,
+   "op": "mutate",
+   "parent_hash": "d0aaea03904d",
+   "score": 1.3912512400376273,
+   "sharpe_prevault": 1.3842576910587558
+  },
+  {
    "birth_gen": 96,
    "family": "seasonal_rule",
    "generation": 96,
@@ -65,7 +124,7 @@
   {
    "birth_gen": 102,
    "family": "seasonal_rule",
-   "generation": 102,
+   "generation": 103,
    "genome": {
     "portfolio": {
      "gross": 0.6,
@@ -116,7 +175,7 @@
    },
    "hash": "d0aaea03904d",
    "n_days_prevault": 6041,
-   "op": "mutate",
+   "op": "elite",
    "parent_hash": "86c05d1cf466",
    "score": 1.339284651454044,
    "sharpe_prevault": 1.3789226241217936
@@ -124,7 +183,7 @@
   {
    "birth_gen": 99,
    "family": "seasonal_rule",
-   "generation": 102,
+   "generation": 103,
    "genome": {
     "portfolio": {
      "gross": 0.6,
@@ -417,6 +476,65 @@
    "sharpe_prevault": 1.370448324507429
   },
   {
+   "birth_gen": 103,
+   "family": "seasonal_rule",
+   "generation": 103,
+   "genome": {
+    "portfolio": {
+     "gross": 0.8,
+     "n_long": 4,
+     "n_short": 0,
+     "rebalance_days": 1,
+     "vol_target": 0.2,
+     "weighting": "inv_vol"
+    },
+    "risk": {
+     "dd_limit": null,
+     "regime_filter": "spy_200dma",
+     "regime_scale": 0.5,
+     "stop_loss": 0.1,
+     "trail_stop": 0.2
+    },
+    "signal": {
+     "family": "seasonal_rule",
+     "features": [],
+     "horizon": 21,
+     "params": {},
+     "refit_days": 126
+    },
+    "signal_bear": {
+     "family": "hgb",
+     "features": [
+      "credit_mom21",
+      "curve_10y3m",
+      "mkt_vol_ratio",
+      "mom_21",
+      "mom_63",
+      "rs_sector",
+      "rs_spy",
+      "rsi",
+      "seasonality",
+      "vix",
+      "xs_mom_63"
+     ],
+     "horizon": 10,
+     "params": {
+      "learning_rate": 0.1,
+      "max_depth": 2,
+      "max_iter": 100,
+      "min_samples_leaf": 100
+     },
+     "refit_days": 63
+    }
+   },
+   "hash": "0e28ef455525",
+   "n_days_prevault": 6041,
+   "op": "mutate",
+   "parent_hash": "0c2989f29c5c",
+   "score": 1.2435756577685484,
+   "sharpe_prevault": 1.3665430616163863
+  },
+  {
    "birth_gen": 102,
    "family": "seasonal_rule",
    "generation": 102,
@@ -474,122 +592,6 @@
    "parent_hash": "a65928d6257c",
    "score": 1.3314014781048533,
    "sharpe_prevault": 1.3649273048257395
-  },
-  {
-   "birth_gen": 100,
-   "family": "seasonal_rule",
-   "generation": 102,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 3,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.1,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.15,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 126
-    },
-    "signal_bear": {
-     "family": "hgb",
-     "features": [
-      "credit_mom21",
-      "curve_10y3m",
-      "mkt_vol_ratio",
-      "mom_21",
-      "mom_63",
-      "rs_sector",
-      "rs_spy",
-      "rsi",
-      "seasonality",
-      "vix",
-      "xs_mom_63"
-     ],
-     "horizon": 10,
-     "params": {
-      "learning_rate": 0.1,
-      "max_depth": 2,
-      "max_iter": 100,
-      "min_samples_leaf": 100
-     },
-     "refit_days": 63
-    }
-   },
-   "hash": "a65928d6257c",
-   "n_days_prevault": 6041,
-   "op": "elite",
-   "parent_hash": "b16b857d9a1d",
-   "score": 1.3314014781048533,
-   "sharpe_prevault": 1.3649273048257395
-  },
-  {
-   "birth_gen": 98,
-   "family": "seasonal_rule",
-   "generation": 98,
-   "genome": {
-    "portfolio": {
-     "gross": 0.6,
-     "n_long": 3,
-     "n_short": 0,
-     "rebalance_days": 1,
-     "vol_target": 0.15,
-     "weighting": "inv_vol"
-    },
-    "risk": {
-     "dd_limit": null,
-     "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
-     "stop_loss": 0.1,
-     "trail_stop": 0.2
-    },
-    "signal": {
-     "family": "seasonal_rule",
-     "features": [],
-     "horizon": 21,
-     "params": {},
-     "refit_days": 126
-    },
-    "signal_bear": {
-     "family": "logistic",
-     "features": [
-      "curve_10y3m",
-      "curve_chg21",
-      "mkt_vol_ratio",
-      "mom_10",
-      "mom_126",
-      "mom_21",
-      "rsi",
-      "xs_mom_63"
-     ],
-     "horizon": 5,
-     "params": {
-      "C": 0.01
-     },
-     "refit_days": 63,
-     "train_window": 2520
-    }
-   },
-   "hash": "92d3d4a15474",
-   "n_days_prevault": 6041,
-   "op": "crossover",
-   "parent_hash": [
-    "150e6e6da39b",
-    "2e205f0c0d2d"
-   ],
-   "score": 1.2296853397987795,
-   "sharpe_prevault": 1.35027546396014
   }
  ],
  "note": "REWRITTEN every generation: a ranked CACHE of the best pre-vault Sharpes on record, regenerable from the trial ledger and the returns artifacts. Scores are the LATEST evaluation of each genome, not its best ever \u2014 see evolution.update_hall_of_fame.",
