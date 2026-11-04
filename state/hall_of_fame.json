@@ -479,12 +479,12 @@
    "sharpe_prevault": 1.408767926957975
   },
   {
-   "birth_gen": 161,
+   "birth_gen": 162,
    "family": "seasonal_rule",
-   "generation": 161,
+   "generation": 162,
    "genome": {
     "portfolio": {
-     "gross": 0.6,
+     "gross": 0.8,
      "n_long": 3,
      "n_short": 0,
      "rebalance_days": 1,
@@ -530,20 +530,17 @@
      "refit_days": 63
     }
    },
-   "hash": "f60b03f519f5",
+   "hash": "22b3a40cda9b",
    "n_days_prevault": 6041,
-   "op": "crossover",
-   "parent_hash": [
-    "22b3a40cda9b",
-    "2b8e6d06606e"
-   ],
-   "score": 1.3599520003649208,
-   "sharpe_prevault": 1.3929644966288286
+   "op": "mutate",
+   "parent_hash": "f60b03f519f5",
+   "score": 1.22017139271668,
+   "sharpe_prevault": 1.3153020887090359
   },
   {
-   "birth_gen": 161,
+   "birth_gen": 162,
    "family": "seasonal_rule",
-   "generation": 161,
+   "generation": 162,
    "genome": {
     "portfolio": {
      "gross": 0.8,
@@ -554,16 +551,16 @@
      "weighting": "inv_vol"
     },
     "risk": {
-     "dd_limit": null,
+     "dd_limit": 0.1,
      "regime_filter": "spy_200dma",
-     "regime_scale": 0.5,
+     "regime_scale": 0.0,
      "stop_loss": null,
      "trail_stop": 0.2
     },
     "signal": {
      "family": "seasonal_rule",
      "features": [],
-     "horizon": 21,
+     "horizon": 63,
      "params": {},
      "refit_days": 63
     },
@@ -592,12 +589,15 @@
      "refit_days": 63
     }
    },
-   "hash": "f9b530daf9c2",
+   "hash": "3551231dea4f",
    "n_days_prevault": 6041,
-   "op": "mutate",
-   "parent_hash": "5daf80c6909e",
-   "score": 1.3918133249899791,
-   "sharpe_prevault": 1.3661543566644563
+   "op": "crossover",
+   "parent_hash": [
+    "f60b03f519f5",
+    "3551231dea4f"
+   ],
+   "score": 1.22017139271668,
+   "sharpe_prevault": 1.3153020887090359
   }
  ],
  "note": "REWRITTEN every generation: a ranked CACHE of the best pre-vault Sharpes on record, regenerable from the trial ledger and the returns artifacts. Scores are the LATEST evaluation of each genome, not its best ever \u2014 see evolution.update_hall_of_fame.",
