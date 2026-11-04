@@ -479,20 +479,20 @@
    "sharpe_prevault": 1.408767926957975
   },
   {
-   "birth_gen": 160,
+   "birth_gen": 161,
    "family": "seasonal_rule",
-   "generation": 160,
+   "generation": 161,
    "genome": {
     "portfolio": {
-     "gross": 0.8,
-     "n_long": 4,
+     "gross": 0.6,
+     "n_long": 3,
      "n_short": 0,
      "rebalance_days": 1,
      "vol_target": 0.15,
      "weighting": "inv_vol"
     },
     "risk": {
-     "dd_limit": null,
+     "dd_limit": 0.1,
      "regime_filter": "spy_200dma",
      "regime_scale": 0.0,
      "stop_loss": null,
@@ -501,9 +501,9 @@
     "signal": {
      "family": "seasonal_rule",
      "features": [],
-     "horizon": 10,
+     "horizon": 5,
      "params": {},
-     "refit_days": 126
+     "refit_days": 63
     },
     "signal_bear": {
      "family": "hgb",
@@ -530,17 +530,20 @@
      "refit_days": 63
     }
    },
-   "hash": "a4fd9cf3600b",
+   "hash": "f60b03f519f5",
    "n_days_prevault": 6041,
-   "op": "mutate",
-   "parent_hash": "632a6ebd01c4",
-   "score": 1.2042720557023199,
-   "sharpe_prevault": 1.3641633941167357
+   "op": "crossover",
+   "parent_hash": [
+    "22b3a40cda9b",
+    "2b8e6d06606e"
+   ],
+   "score": 1.3599520003649208,
+   "sharpe_prevault": 1.3929644966288286
   },
   {
-   "birth_gen": 160,
+   "birth_gen": 161,
    "family": "seasonal_rule",
-   "generation": 160,
+   "generation": 161,
    "genome": {
     "portfolio": {
      "gross": 0.8,
@@ -560,7 +563,7 @@
     "signal": {
      "family": "seasonal_rule",
      "features": [],
-     "horizon": 63,
+     "horizon": 21,
      "params": {},
      "refit_days": 63
     },
@@ -589,15 +592,12 @@
      "refit_days": 63
     }
    },
-   "hash": "5daf80c6909e",
+   "hash": "f9b530daf9c2",
    "n_days_prevault": 6041,
-   "op": "crossover",
-   "parent_hash": [
-    "5ac690d24dd6",
-    "8ae0551dc7cf"
-   ],
-   "score": 1.3797304451040977,
-   "sharpe_prevault": 1.3617928902194947
+   "op": "mutate",
+   "parent_hash": "5daf80c6909e",
+   "score": 1.3918133249899791,
+   "sharpe_prevault": 1.3661543566644563
   }
  ],
  "note": "REWRITTEN every generation: a ranked CACHE of the best pre-vault Sharpes on record, regenerable from the trial ledger and the returns artifacts. Scores are the LATEST evaluation of each genome, not its best ever \u2014 see evolution.update_hall_of_fame.",
