@@ -479,13 +479,13 @@
    "sharpe_prevault": 1.408767926957975
   },
   {
-   "birth_gen": 159,
+   "birth_gen": 160,
    "family": "seasonal_rule",
-   "generation": 159,
+   "generation": 160,
    "genome": {
     "portfolio": {
      "gross": 0.8,
-     "n_long": 3,
+     "n_long": 4,
      "n_short": 0,
      "rebalance_days": 1,
      "vol_target": 0.15,
@@ -530,20 +530,17 @@
      "refit_days": 63
     }
    },
-   "hash": "632a6ebd01c4",
+   "hash": "a4fd9cf3600b",
    "n_days_prevault": 6041,
-   "op": "crossover",
-   "parent_hash": [
-    "9e26d259e725",
-    "f7faadeaa268"
-   ],
-   "score": 1.4073144428360975,
-   "sharpe_prevault": 1.367966822878954
+   "op": "mutate",
+   "parent_hash": "632a6ebd01c4",
+   "score": 1.2042720557023199,
+   "sharpe_prevault": 1.3641633941167357
   },
   {
-   "birth_gen": 159,
+   "birth_gen": 160,
    "family": "seasonal_rule",
-   "generation": 159,
+   "generation": 160,
    "genome": {
     "portfolio": {
      "gross": 0.8,
@@ -563,9 +560,9 @@
     "signal": {
      "family": "seasonal_rule",
      "features": [],
-     "horizon": 10,
+     "horizon": 63,
      "params": {},
-     "refit_days": 126
+     "refit_days": 63
     },
     "signal_bear": {
      "family": "hgb",
@@ -592,12 +589,15 @@
      "refit_days": 63
     }
    },
-   "hash": "8ae0551dc7cf",
+   "hash": "5daf80c6909e",
    "n_days_prevault": 6041,
-   "op": "mutate",
-   "parent_hash": "9b6fc97cce2c",
-   "score": 1.4073144428360975,
-   "sharpe_prevault": 1.367966822878954
+   "op": "crossover",
+   "parent_hash": [
+    "5ac690d24dd6",
+    "8ae0551dc7cf"
+   ],
+   "score": 1.3797304451040977,
+   "sharpe_prevault": 1.3617928902194947
   }
  ],
  "note": "REWRITTEN every generation: a ranked CACHE of the best pre-vault Sharpes on record, regenerable from the trial ledger and the returns artifacts. Scores are the LATEST evaluation of each genome, not its best ever \u2014 see evolution.update_hall_of_fame.",
